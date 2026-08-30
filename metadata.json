@@ -1,0 +1,6 @@
+{
+  "name": "ReadMe",
+  "description": "A simple Android reading assistant designed to make written content easier to listen to and follow.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

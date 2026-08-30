@@ -24,15 +24,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.readme.app.speech.ReadMeVoice
 
 @Composable
 fun ReadMeVoiceSelector(
     selectedVoice: String,
-    voices: List<String>,
-    onVoiceSelected: (String) -> Unit,
+    voices: List<ReadMeVoice>,
+    onVoiceSelected: (ReadMeVoice) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val displayVoice = if (voices.isEmpty()) {
+        "No voices available"
+    } else {
+        selectedVoice.ifBlank { "Select Voice" }
+    }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -48,16 +54,16 @@ fun ReadMeVoiceSelector(
                     .clip(MaterialTheme.shapes.medium)
                     .background(MaterialTheme.colorScheme.surface)
                     .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
-                    .clickable { expanded = true }
+                    .clickable(enabled = voices.isNotEmpty()) { expanded = true }
                     .padding(horizontal = 16.dp, vertical = 16.dp)
-                    .semantics { contentDescription = "Voice Selector, currently $selectedVoice" },
+                    .semantics { contentDescription = "Voice Selector, currently $displayVoice" },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = selectedVoice,
+                    text = displayVoice,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = if (voices.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = "▼",
@@ -65,29 +71,32 @@ fun ReadMeVoiceSelector(
                 )
             }
 
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                voices.forEach { voice ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = voice,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        },
-                        onClick = {
-                            onVoiceSelected(voice)
-                            expanded = false
-                        }
-                    )
+            if (voices.isNotEmpty()) {
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    voices.forEach { voice ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = voice.displayName,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            onClick = {
+                                onVoiceSelected(voice)
+                                expanded = false
+                            }
+                        )
+                    }
                 }
             }
         }
     }
 }
+

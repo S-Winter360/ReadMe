@@ -21,7 +21,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -30,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import com.readme.app.ui.components.ReadMePrimaryButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
+import com.readme.app.speech.TtsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.readme.app.settings.ReadMeViewModel
 import java.util.Locale
@@ -42,15 +42,14 @@ fun ReadMeScreen(
     onNavigateToAbout: () -> Unit = {}
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val availableVoices by viewModel.availableVoices.collectAsStateWithLifecycle()
+    val ttsState by viewModel.ttsState.collectAsStateWithLifecycle()
     
-    val voiceMap = listOf(
-        "natural_voice" to "Natural Voice",
-        "clear_voice" to "Clear Voice",
-        "soft_voice" to "Soft Voice",
-        "deep_voice" to "Deep Voice"
-    )
+    val selectedVoice = availableVoices.find { it.id == settings.selectedVoice }
+    val selectedVoiceDisplayName = selectedVoice?.displayName 
+        ?: if (availableVoices.isEmpty()) "No voices available" else availableVoices.firstOrNull()?.displayName ?: ""
     
-    var isReading by remember { mutableStateOf(false) }
+    val isSpeaking = ttsState == TtsState.Speaking
     
     var menuExpanded by remember { mutableStateOf(false) }
     
@@ -107,11 +106,10 @@ fun ReadMeScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             ReadMeVoiceSelector(
-                selectedVoice = voiceMap.find { it.first == settings.selectedVoice }?.second ?: "Natural Voice",
-                voices = voiceMap.map { it.second },
-                onVoiceSelected = { voiceName ->
-                    val voiceId = voiceMap.find { it.second == voiceName }?.first ?: "natural_voice"
-                    viewModel.updateSelectedVoice(voiceId)
+                selectedVoice = selectedVoiceDisplayName,
+                voices = availableVoices,
+                onVoiceSelected = { voice ->
+                    viewModel.updateSelectedVoice(voice.id)
                 }
             )
 
@@ -144,8 +142,14 @@ fun ReadMeScreen(
             Spacer(modifier = Modifier.weight(1f, fill = false))
 
             ReadMePrimaryButton(
-                text = if (isReading) "Ready to read..." else "Start Reading",
-                onClick = { isReading = !isReading },
+                text = if (isSpeaking) "Reading..." else "Start Reading",
+                onClick = {
+                    if (isSpeaking) {
+                        viewModel.stopReading()
+                    } else {
+                        viewModel.startReading()
+                    }
+                },
                 modifier = Modifier.padding(bottom = 24.dp)
             )
         }
