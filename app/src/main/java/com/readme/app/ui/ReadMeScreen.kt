@@ -30,6 +30,7 @@ import com.readme.app.ui.components.ReadMePrimaryButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
 import com.readme.app.speech.TtsState
+import com.readme.app.reading.ReadingSessionState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.readme.app.settings.ReadMeViewModel
 import java.util.Locale
@@ -44,12 +45,13 @@ fun ReadMeScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val availableVoices by viewModel.availableVoices.collectAsStateWithLifecycle()
     val ttsState by viewModel.ttsState.collectAsStateWithLifecycle()
+    val readingState by viewModel.readingState.collectAsStateWithLifecycle()
     
     val selectedVoice = availableVoices.find { it.id == settings.selectedVoice }
     val selectedVoiceDisplayName = selectedVoice?.displayName 
         ?: if (availableVoices.isEmpty()) "No voices available" else availableVoices.firstOrNull()?.displayName ?: ""
     
-    val isSpeaking = ttsState == TtsState.Speaking
+    val isReading = readingState == ReadingSessionState.Reading || ttsState == TtsState.Speaking
     
     var menuExpanded by remember { mutableStateOf(false) }
     
@@ -142,9 +144,9 @@ fun ReadMeScreen(
             Spacer(modifier = Modifier.weight(1f, fill = false))
 
             ReadMePrimaryButton(
-                text = if (isSpeaking) "Reading..." else "Start Reading",
+                text = if (isReading) "Reading..." else "Start Reading",
                 onClick = {
-                    if (isSpeaking) {
+                    if (isReading) {
                         viewModel.stopReading()
                     } else {
                         viewModel.startReading()
