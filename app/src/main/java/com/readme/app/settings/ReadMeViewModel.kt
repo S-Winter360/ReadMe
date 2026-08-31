@@ -1,30 +1,47 @@
 package com.readme.app.settings
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.readme.app.reading.ReadingEngine
 import com.readme.app.reading.ReadingSegment
 import com.readme.app.reading.ReadingSessionState
-import com.readme.app.reading.SampleContent
+import com.readme.app.reading.content.ReadingContentSource
+import com.readme.app.reading.content.SampleContentSource
+import com.readme.app.reading.content.TxtContentSource
 import com.readme.app.speech.ReadMeSpeechEngine
 import com.readme.app.speech.ReadMeVoice
 import com.readme.app.speech.SpeechEngineListener
 import com.readme.app.speech.TtsState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-class ReadMeViewModel(application: Application) : AndroidViewModel(application) {
+class ReadMeViewModel @JvmOverloads constructor(
+    application: Application,
+    private val contentSource: ReadingContentSource = SampleContentSource()
+) : AndroidViewModel(application) {
 
     private val repository = ReadMeSettingsRepository(application)
     
     val speechEngine = ReadMeSpeechEngine(application)
-    val readingEngine = ReadingEngine(SampleContent.sampleDocument)
+    val readingEngine = ReadingEngine()
+
+    private var activeContentSource: ReadingContentSource = contentSource
+
+    private val _selectedDocumentName = MutableStateFlow<String?>(null)
+    val selectedDocumentName: StateFlow<String?> = _selectedDocumentName.asStateFlow()
+
+    private val _loadError = MutableStateFlow<String?>(null)
+    val loadError: StateFlow<String?> = _loadError.asStateFlow()
 
     val availableVoices: StateFlow<List<ReadMeVoice>> = speechEngine.availableVoices
     val ttsState: StateFlow<TtsState> = speechEngine.state
@@ -41,6 +58,16 @@ class ReadMeViewModel(application: Application) : AndroidViewModel(application) 
     private var restartJob: Job? = null
 
     init {
+        // Load initial document from content source
+        viewModelScope.launch {
+            try {
+                val document = activeContentSource.load()
+                readingEngine.loadDocument(document)
+            } catch (e: Exception) {
+                readingEngine.setError()
+            }
+        }
+
         speechEngine.setSpeechListener(object : SpeechEngineListener {
             override fun onSegmentStarted(segmentId: String, sessionId: Long) {
                 // Segment speech started
@@ -158,21 +185,67 @@ class ReadMeViewModel(application: Application) : AndroidViewModel(application) 
         scheduleRestart(pitch = pitch)
     }
 
+    fun selectTextFile(uri: Uri) {
+        stopReading()
+        try {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+            getApplication<Application>().contentResolver.takePersistableUriPermission(uri, flags)
+        } catch (e: Exception) {
+            // Some providers do not support persistable permissions; proceed safely
+        }
+
+        val displayName = TxtContentSource.resolveDisplayName(
+            getApplication<Application>().contentResolver,
+            uri
+        )
+        _selectedDocumentName.value = displayName
+        _loadError.value = null
+
+        val txtSource = TxtContentSource(getApplication(), uri, displayName)
+        activeContentSource = txtSource
+
+        viewModelScope.launch {
+            try {
+                val document = txtSource.load()
+                readingEngine.loadDocument(document)
+            } catch (e: Exception) {
+                _loadError.value = "Unable to read selected text file"
+                readingEngine.setError()
+            }
+        }
+    }
+
     fun startReading() {
         restartJob?.cancel()
+        val currentSettings = settings.value
         activeSessionId = System.currentTimeMillis()
-        val firstSegment = readingEngine.startSession()
-        if (firstSegment != null) {
-            val currentSettings = settings.value
-            speechEngine.speakSegment(
-                segmentId = firstSegment.id,
-                text = firstSegment.text,
-                sessionId = activeSessionId,
-                voiceId = currentSettings.selectedVoice,
-                speed = currentSettings.speechSpeed,
-                pitch = currentSettings.speechPitch,
-                volume = currentSettings.speechVolume
-            )
+        val thisSessionId = activeSessionId
+
+        viewModelScope.launch {
+            if (readingEngine.totalSegments() == 0) {
+                try {
+                    val document = activeContentSource.load()
+                    readingEngine.loadDocument(document)
+                } catch (e: Exception) {
+                    readingEngine.setError()
+                    return@launch
+                }
+            }
+
+            if (activeSessionId != thisSessionId || activeSessionId == 0L) return@launch
+
+            val firstSegment = readingEngine.startSession()
+            if (firstSegment != null) {
+                speechEngine.speakSegment(
+                    segmentId = firstSegment.id,
+                    text = firstSegment.text,
+                    sessionId = thisSessionId,
+                    voiceId = currentSettings.selectedVoice,
+                    speed = currentSettings.speechSpeed,
+                    pitch = currentSettings.speechPitch,
+                    volume = currentSettings.speechVolume
+                )
+            }
         }
     }
 

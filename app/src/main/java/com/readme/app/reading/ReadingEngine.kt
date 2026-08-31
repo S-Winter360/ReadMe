@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * Does not interact directly with Android TextToSpeech.
  */
 class ReadingEngine(
-    initialDocument: ReadingDocument = SampleContent.sampleDocument
+    initialDocument: ReadingDocument = ReadingDocument(id = "", title = "", sections = emptyList())
 ) {
     private val _readingState = MutableStateFlow(ReadingSessionState.Idle)
     val readingState: StateFlow<ReadingSessionState> = _readingState.asStateFlow()

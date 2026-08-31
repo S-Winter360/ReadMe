@@ -1,11 +1,15 @@
 package com.readme.app.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -24,15 +28,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.readme.app.reading.ReadingSessionState
+import com.readme.app.settings.ReadMeViewModel
+import com.readme.app.speech.TtsState
 import com.readme.app.ui.components.ReadMePrimaryButton
+import com.readme.app.ui.components.ReadMeSecondaryButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
-import com.readme.app.speech.TtsState
-import com.readme.app.reading.ReadingSessionState
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.readme.app.settings.ReadMeViewModel
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -46,6 +54,8 @@ fun ReadMeScreen(
     val availableVoices by viewModel.availableVoices.collectAsStateWithLifecycle()
     val ttsState by viewModel.ttsState.collectAsStateWithLifecycle()
     val readingState by viewModel.readingState.collectAsStateWithLifecycle()
+    val selectedDocumentName by viewModel.selectedDocumentName.collectAsStateWithLifecycle()
+    val loadError by viewModel.loadError.collectAsStateWithLifecycle()
     
     val selectedVoice = availableVoices.find { it.id == settings.selectedVoice }
     val selectedVoiceDisplayName = selectedVoice?.displayName 
@@ -56,6 +66,14 @@ fun ReadMeScreen(
     var menuExpanded by remember { mutableStateOf(false) }
     
     val pitchLabels = listOf("Low", "Mid-Low", "Mid", "Mid-High", "High")
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            viewModel.selectTextFile(uri)
+        }
+    }
     
     Scaffold(
         topBar = {
@@ -143,18 +161,53 @@ fun ReadMeScreen(
             
             Spacer(modifier = Modifier.weight(1f, fill = false))
 
-            ReadMePrimaryButton(
-                text = if (isReading) "Reading..." else "Start Reading",
-                onClick = {
-                    if (isReading) {
-                        viewModel.stopReading()
-                    } else {
-                        viewModel.startReading()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (selectedDocumentName != null) {
+                    Text(
+                        text = "Selected: $selectedDocumentName",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                if (loadError != null) {
+                    Text(
+                        text = loadError ?: "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+                ReadMeSecondaryButton(
+                    text = "Open Text File",
+                    onClick = {
+                        filePickerLauncher.launch(arrayOf("text/plain", "text/*"))
                     }
-                },
-                modifier = Modifier.padding(bottom = 24.dp)
-            )
+                )
+
+                ReadMePrimaryButton(
+                    text = if (isReading) "Reading..." else "Start Reading",
+                    onClick = {
+                        if (isReading) {
+                            viewModel.stopReading()
+                        } else {
+                            viewModel.startReading()
+                        }
+                    }
+                )
+            }
         }
     }
 }
-
