@@ -3,7 +3,11 @@ package com.readme.app.reading
 object SampleContent {
     val sampleDocument: ReadingDocument = ReadingDocument(
         id = "readme_sample_doc",
-        title = "ReadMe Sample",
+        metadata = ReadingDocumentMetadata(
+            title = "ReadMe Sample",
+            author = null,
+            sourceType = ReadingDocumentSourceType.SAMPLE
+        ),
         sections = listOf(
             ReadingSection(
                 id = "readme_sample_section_intro",

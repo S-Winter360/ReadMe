@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.readme.app.reading.ReadingDocument
 import com.readme.app.reading.ReadingEngine
+import com.readme.app.reading.ReadingPosition
 import com.readme.app.reading.ReadingSegment
 import com.readme.app.reading.ReadingSessionState
 import com.readme.app.reading.content.ReadingContentSource
@@ -48,6 +49,7 @@ class ReadMeViewModel @JvmOverloads constructor(
     val ttsState: StateFlow<TtsState> = speechEngine.state
     val readingState: StateFlow<ReadingSessionState> = readingEngine.readingState
     val currentSegment: StateFlow<ReadingSegment?> = readingEngine.currentSegment
+    val currentPosition: StateFlow<ReadingPosition?> = readingEngine.currentPosition
 
     val settings: StateFlow<ReadMeSettings> = repository.settingsFlow.stateIn(
         scope = viewModelScope,
@@ -237,11 +239,16 @@ class ReadMeViewModel @JvmOverloads constructor(
 
             if (activeSessionId != thisSessionId || activeSessionId == 0L) return@launch
 
-            val firstSegment = readingEngine.startSession()
-            if (firstSegment != null) {
+            val segmentToSpeak = if (readingEngine.readingState.value == ReadingSessionState.Stopped && readingEngine.currentPosition.value != null) {
+                readingEngine.resumeFromCurrentPosition()
+            } else {
+                readingEngine.startFromBeginning()
+            }
+
+            if (segmentToSpeak != null) {
                 speechEngine.speakSegment(
-                    segmentId = firstSegment.id,
-                    text = firstSegment.text,
+                    segmentId = segmentToSpeak.id,
+                    text = segmentToSpeak.text,
                     sessionId = thisSessionId,
                     voiceId = currentSettings.selectedVoice,
                     speed = currentSettings.speechSpeed,

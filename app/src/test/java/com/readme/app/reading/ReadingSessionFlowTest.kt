@@ -115,7 +115,31 @@ class ReadingSessionFlowTest {
     }
 
     @Test
-    fun stopAndRestart_startsFromSegmentZero() {
+    fun stopAndResume_resumesFromCurrentSegment() {
+        val rawText = "Sentence 1. Sentence 2. Sentence 3."
+        val doc = TxtDocumentParser.parse("TestDoc.txt", rawText)
+        val engine = ReadingEngine(doc)
+
+        // Start reading
+        engine.startSession()
+        engine.advance() // at segment 1: "Sentence 2."
+        assertEquals("Sentence 2.", engine.currentSegment.value?.text)
+
+        // User stops reading
+        engine.stop()
+        assertEquals(ReadingSessionState.Stopped, engine.readingState.value)
+        assertNull(engine.currentSegment.value)
+
+        // Resume from current position
+        val resumed = engine.resumeFromCurrentPosition()
+        assertNotNull(resumed)
+        assertEquals("Sentence 2.", resumed?.text)
+        assertEquals(1, engine.currentSegmentIndex.value)
+        assertEquals(ReadingSessionState.Reading, engine.readingState.value)
+    }
+
+    @Test
+    fun stopAndStartFromBeginning_startsFromSegmentZero() {
         val rawText = "Sentence 1. Sentence 2. Sentence 3."
         val doc = TxtDocumentParser.parse("TestDoc.txt", rawText)
         val engine = ReadingEngine(doc)
@@ -130,8 +154,8 @@ class ReadingSessionFlowTest {
         assertEquals(ReadingSessionState.Stopped, engine.readingState.value)
         assertNull(engine.currentSegment.value)
 
-        // User presses Start Reading again
-        val restarted = engine.startSession()
+        // User explicitly starts from beginning
+        val restarted = engine.startFromBeginning()
         assertNotNull(restarted)
         assertEquals("Sentence 1.", restarted?.text)
         assertEquals(0, engine.currentSegmentIndex.value)
