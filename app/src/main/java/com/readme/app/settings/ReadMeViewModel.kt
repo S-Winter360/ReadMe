@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.readme.app.reading.ReadingDocument
 import com.readme.app.reading.ReadingEngine
 import com.readme.app.reading.ReadingSegment
 import com.readme.app.reading.ReadingSessionState
@@ -210,6 +211,8 @@ class ReadMeViewModel @JvmOverloads constructor(
                 readingEngine.loadDocument(document)
             } catch (e: Exception) {
                 _loadError.value = "Unable to read selected text file"
+                _selectedDocumentName.value = null
+                readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
                 readingEngine.setError()
             }
         }
@@ -222,7 +225,7 @@ class ReadMeViewModel @JvmOverloads constructor(
         val thisSessionId = activeSessionId
 
         viewModelScope.launch {
-            if (readingEngine.totalSegments() == 0) {
+            if (readingEngine.totalSegments() == 0 && _selectedDocumentName.value == null) {
                 try {
                     val document = activeContentSource.load()
                     readingEngine.loadDocument(document)
