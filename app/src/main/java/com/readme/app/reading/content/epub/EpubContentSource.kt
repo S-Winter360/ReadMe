@@ -45,17 +45,23 @@ class EpubContentSource(
     }
 
     override suspend fun load(): ReadingDocument = withContext(Dispatchers.IO) {
-        val epubPackage = parsePackage()
+        val resolver = context.contentResolver
+        val displayName = if (customDisplayName.isNotBlank()) {
+            customDisplayName
+        } else {
+            resolveDisplayName(resolver, uri)
+        }
 
-        ReadingDocument(
-            id = "epub_doc_${System.currentTimeMillis()}",
-            metadata = ReadingDocumentMetadata(
-                title = epubPackage.metadata.title,
-                author = epubPackage.metadata.author,
-                sourceType = ReadingDocumentSourceType.EPUB
-            ),
-            sections = emptyList()
-        )
+        val inputStream = resolver.openInputStream(uri)
+            ?: throw IOException("Cannot open input stream for EPUB URI: $uri")
+
+        inputStream.use { stream ->
+            EpubDocumentParser.parse(
+                inputStream = stream,
+                fallbackTitle = displayName,
+                sourceIdentifier = uri.toString()
+            )
+        }
     }
 
     companion object {

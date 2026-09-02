@@ -78,4 +78,40 @@ class ReadingContentSourceTest {
         assertEquals("", engine.currentDocument.id)
         assertEquals(ReadingSessionState.Idle, engine.readingState.value)
     }
+
+    @Test
+    fun epubReadingDocument_hasEpubSourceTypeAndPopulatedSectionsInPhase7C() {
+        val epubDoc = ReadingDocument(
+            id = "epub_test_doc",
+            metadata = ReadingDocumentMetadata(
+                title = "Nikola",
+                author = "Guy Boothby",
+                sourceType = ReadingDocumentSourceType.EPUB
+            ),
+            sections = listOf(
+                ReadingSection(
+                    id = "epub_test_doc_sec_0",
+                    title = "Chapter 1",
+                    segments = listOf(
+                        ReadingSegment(id = "seg_0", text = "Mr. Nikola stepped onto the pier."),
+                        ReadingSegment(id = "seg_1", text = "The night was pitch black.")
+                    )
+                )
+            )
+        )
+
+        assertEquals("Nikola", epubDoc.title)
+        assertEquals("Guy Boothby", epubDoc.author)
+        assertEquals(ReadingDocumentSourceType.EPUB, epubDoc.sourceType)
+        assertEquals(2, epubDoc.allSegments().size)
+
+        val engine = ReadingEngine()
+        engine.loadDocument(epubDoc)
+        assertEquals(2, engine.totalSegments())
+        assertEquals(ReadingSessionState.Idle, engine.readingState.value)
+        val segment = engine.startSession()
+        assertNotNull(segment)
+        assertEquals("Mr. Nikola stepped onto the pier.", segment?.text)
+        assertEquals(ReadingSessionState.Reading, engine.readingState.value)
+    }
 }

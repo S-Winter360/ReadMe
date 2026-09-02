@@ -58,13 +58,13 @@ fun HowToUseScreen(onNavigateBack: () -> Unit) {
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             Text(
-                text = "3. Tap \"Start Reading\" when you are ready.",
+                text = "3. Open supported content using \"Open Content\".",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             Text(
-                text = "4. ReadMe will read supported content aloud as the reading features are introduced.",
+                text = "4. Tap \"Start Reading\" when you are ready.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(bottom = 16.dp)

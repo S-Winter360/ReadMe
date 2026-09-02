@@ -71,7 +71,7 @@ fun ReadMeScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            viewModel.selectTextFile(uri)
+            viewModel.selectDocument(uri)
         }
     }
     
@@ -191,9 +191,9 @@ fun ReadMeScreen(
                 }
 
                 ReadMeSecondaryButton(
-                    text = "Open Text File",
+                    text = "Open Content",
                     onClick = {
-                        filePickerLauncher.launch(arrayOf("text/plain", "text/*"))
+                        filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf"))
                     }
                 )
 
