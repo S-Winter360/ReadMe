@@ -22,6 +22,7 @@ import com.readme.app.speech.ReadMeSpeechEngine
 import com.readme.app.speech.ReadMeVoice
 import com.readme.app.speech.SpeechEngineListener
 import com.readme.app.speech.TtsState
+import com.readme.app.ui.pdf.PdfViewerState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +50,9 @@ class ReadMeViewModel @JvmOverloads constructor(
 
     private val _loadError = MutableStateFlow<String?>(null)
     val loadError: StateFlow<String?> = _loadError.asStateFlow()
+
+    private val _pdfViewerState = MutableStateFlow<PdfViewerState>(PdfViewerState.Empty)
+    val pdfViewerState: StateFlow<PdfViewerState> = _pdfViewerState.asStateFlow()
 
     val availableVoices: StateFlow<List<ReadMeVoice>> = speechEngine.availableVoices
     val ttsState: StateFlow<TtsState> = speechEngine.state
@@ -216,6 +220,8 @@ class ReadMeViewModel @JvmOverloads constructor(
 
         when (format) {
             DetectedFormat.PDF -> {
+                // Clear any existing visual PDF state immediately to prevent showing stale content
+                _pdfViewerState.value = PdfViewerState.Loading(uri)
                 val pdfSource = PdfContentSource(getApplication(), uri, displayName)
                 activeContentSource = pdfSource
 
@@ -225,30 +231,36 @@ class ReadMeViewModel @JvmOverloads constructor(
                         if (document.sections.isEmpty() || document.allSegments().isEmpty()) {
                             _loadError.value = "No readable text found in selected PDF"
                             _selectedDocumentName.value = null
+                            _pdfViewerState.value = PdfViewerState.Empty
                             readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
                             readingEngine.setError()
                         } else {
                             readingEngine.loadDocument(document)
+                            _pdfViewerState.value = PdfViewerState.Active(uri, displayName)
                         }
                     } catch (e: com.readme.app.reading.content.pdf.PdfPasswordRequiredException) {
                         _loadError.value = "Password required for this PDF."
                         _selectedDocumentName.value = null
+                        _pdfViewerState.value = PdfViewerState.Empty
                         readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
                         readingEngine.setError()
                     } catch (e: com.readme.app.reading.content.pdf.PdfNoSelectableTextException) {
                         _loadError.value = "No selectable text was found in this PDF."
                         _selectedDocumentName.value = null
+                        _pdfViewerState.value = PdfViewerState.Empty
                         readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
                         readingEngine.setError()
                     } catch (e: Exception) {
                         _loadError.value = "Unable to read selected PDF file"
                         _selectedDocumentName.value = null
+                        _pdfViewerState.value = PdfViewerState.Empty
                         readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
                         readingEngine.setError()
                     }
                 }
             }
             DetectedFormat.EPUB -> {
+                _pdfViewerState.value = PdfViewerState.Empty
                 val epubSource = EpubContentSource(getApplication(), uri, displayName)
                 activeContentSource = epubSource
 
@@ -277,6 +289,7 @@ class ReadMeViewModel @JvmOverloads constructor(
                 }
             }
             DetectedFormat.TXT -> {
+                _pdfViewerState.value = PdfViewerState.Empty
                 val txtSource = TxtContentSource(getApplication(), uri, displayName)
                 activeContentSource = txtSource
 
@@ -293,6 +306,7 @@ class ReadMeViewModel @JvmOverloads constructor(
                 }
             }
             DetectedFormat.UNKNOWN -> {
+                _pdfViewerState.value = PdfViewerState.Empty
                 _loadError.value = "Unsupported document format"
                 _selectedDocumentName.value = null
                 readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))

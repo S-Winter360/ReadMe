@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -41,6 +43,8 @@ import com.readme.app.ui.components.ReadMePrimaryButton
 import com.readme.app.ui.components.ReadMeSecondaryButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
+import com.readme.app.ui.pdf.PdfReaderView
+import com.readme.app.ui.pdf.PdfViewerState
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,6 +60,7 @@ fun ReadMeScreen(
     val readingState by viewModel.readingState.collectAsStateWithLifecycle()
     val selectedDocumentName by viewModel.selectedDocumentName.collectAsStateWithLifecycle()
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
+    val pdfViewerState by viewModel.pdfViewerState.collectAsStateWithLifecycle()
     
     val selectedVoice = availableVoices.find { it.id == settings.selectedVoice }
     val selectedVoiceDisplayName = selectedVoice?.displayName 
@@ -115,98 +120,212 @@ fun ReadMeScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 24.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(32.dp)
-        ) {
-            Spacer(modifier = Modifier.height(8.dp))
-
-            ReadMeVoiceSelector(
-                selectedVoice = selectedVoiceDisplayName,
-                voices = availableVoices,
-                onVoiceSelected = { voice ->
-                    viewModel.updateSelectedVoice(voice.id)
-                }
-            )
-
-            ReadMeSliderControl(
-                label = "Volume",
-                value = settings.speechVolume * 100f,
-                valueString = "${(settings.speechVolume * 100f).toInt()}%",
-                onValueChange = { viewModel.updateSpeechVolume(it / 100f) },
-                valueRange = 0f..100f
-            )
-
-            ReadMeSliderControl(
-                label = "Speed",
-                value = settings.speechSpeed,
-                valueString = String.format(Locale.getDefault(), "%.1f×", settings.speechSpeed),
-                onValueChange = { viewModel.updateSpeechSpeed(it) },
-                valueRange = 0.5f..2.0f,
-                steps = 14
-            )
-
-            ReadMeSliderControl(
-                label = "Pitch",
-                value = settings.speechPitch * 4f,
-                valueString = pitchLabels[(settings.speechPitch * 4f).toInt().coerceIn(0, 4)],
-                onValueChange = { viewModel.updateSpeechPitch(it / 4f) },
-                valueRange = 0f..4f,
-                steps = 3
-            )
-            
-            Spacer(modifier = Modifier.weight(1f, fill = false))
-
+        if (pdfViewerState is PdfViewerState.Active) {
+            val activePdf = pdfViewerState as PdfViewerState.Active
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                if (selectedDocumentName != null) {
-                    Text(
-                        text = "Selected: $selectedDocumentName",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                if (loadError != null) {
-                    Text(
-                        text = loadError ?: "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                ReadMeSecondaryButton(
-                    text = "Open Content",
-                    onClick = {
-                        filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf"))
+                // Visual PDF viewer occupying main available space
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1.2f)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape = MaterialTheme.shapes.small)
+                        .clip(MaterialTheme.shapes.small)
+                ) {
+                    activePdf.uri?.let { pdfUri ->
+                        PdfReaderView(
+                            uri = pdfUri,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
-                )
+                }
 
-                ReadMePrimaryButton(
-                    text = if (isReading) "Reading..." else "Start Reading",
-                    onClick = {
-                        if (isReading) {
-                            viewModel.stopReading()
-                        } else {
-                            viewModel.startReading()
+                // Controls area below viewer
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (selectedDocumentName != null) {
+                        Text(
+                            text = "Selected: $selectedDocumentName",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    if (loadError != null) {
+                        Text(
+                            text = loadError ?: "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    ReadMeSecondaryButton(
+                        text = "Open Content",
+                        onClick = {
+                            filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf"))
                         }
+                    )
+
+                    ReadMePrimaryButton(
+                        text = if (isReading) "Reading..." else "Start Reading",
+                        onClick = {
+                            if (isReading) {
+                                viewModel.stopReading()
+                            } else {
+                                viewModel.startReading()
+                            }
+                        }
+                    )
+
+                    ReadMeVoiceSelector(
+                        selectedVoice = selectedVoiceDisplayName,
+                        voices = availableVoices,
+                        onVoiceSelected = { voice ->
+                            viewModel.updateSelectedVoice(voice.id)
+                        }
+                    )
+
+                    ReadMeSliderControl(
+                        label = "Volume",
+                        value = settings.speechVolume * 100f,
+                        valueString = "${(settings.speechVolume * 100f).toInt()}%",
+                        onValueChange = { viewModel.updateSpeechVolume(it / 100f) },
+                        valueRange = 0f..100f
+                    )
+
+                    ReadMeSliderControl(
+                        label = "Speed",
+                        value = settings.speechSpeed,
+                        valueString = String.format(Locale.getDefault(), "%.1f×", settings.speechSpeed),
+                        onValueChange = { viewModel.updateSpeechSpeed(it) },
+                        valueRange = 0.5f..2.0f,
+                        steps = 14
+                    )
+
+                    ReadMeSliderControl(
+                        label = "Pitch",
+                        value = settings.speechPitch * 4f,
+                        valueString = pitchLabels[(settings.speechPitch * 4f).toInt().coerceIn(0, 4)],
+                        onValueChange = { viewModel.updateSpeechPitch(it / 4f) },
+                        valueRange = 0f..4f,
+                        steps = 3
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 24.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(32.dp)
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ReadMeVoiceSelector(
+                    selectedVoice = selectedVoiceDisplayName,
+                    voices = availableVoices,
+                    onVoiceSelected = { voice ->
+                        viewModel.updateSelectedVoice(voice.id)
                     }
                 )
+
+                ReadMeSliderControl(
+                    label = "Volume",
+                    value = settings.speechVolume * 100f,
+                    valueString = "${(settings.speechVolume * 100f).toInt()}%",
+                    onValueChange = { viewModel.updateSpeechVolume(it / 100f) },
+                    valueRange = 0f..100f
+                )
+
+                ReadMeSliderControl(
+                    label = "Speed",
+                    value = settings.speechSpeed,
+                    valueString = String.format(Locale.getDefault(), "%.1f×", settings.speechSpeed),
+                    onValueChange = { viewModel.updateSpeechSpeed(it) },
+                    valueRange = 0.5f..2.0f,
+                    steps = 14
+                )
+
+                ReadMeSliderControl(
+                    label = "Pitch",
+                    value = settings.speechPitch * 4f,
+                    valueString = pitchLabels[(settings.speechPitch * 4f).toInt().coerceIn(0, 4)],
+                    onValueChange = { viewModel.updateSpeechPitch(it / 4f) },
+                    valueRange = 0f..4f,
+                    steps = 3
+                )
+                
+                Spacer(modifier = Modifier.weight(1f, fill = false))
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (selectedDocumentName != null) {
+                        Text(
+                            text = "Selected: $selectedDocumentName",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    if (loadError != null) {
+                        Text(
+                            text = loadError ?: "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    ReadMeSecondaryButton(
+                        text = "Open Content",
+                        onClick = {
+                            filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf"))
+                        }
+                    )
+
+                    ReadMePrimaryButton(
+                        text = if (isReading) "Reading..." else "Start Reading",
+                        onClick = {
+                            if (isReading) {
+                                viewModel.stopReading()
+                            } else {
+                                viewModel.startReading()
+                            }
+                        }
+                    )
+                }
             }
         }
     }
