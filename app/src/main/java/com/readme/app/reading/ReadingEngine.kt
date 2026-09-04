@@ -210,6 +210,30 @@ class ReadingEngine(
     }
 
     /**
+     * Explicitly sets the current reading position without starting a session.
+     * Validates that the position belongs to the current document.
+     */
+    fun setPosition(position: ReadingPosition) {
+        if (position.documentId != currentDocument.id || currentDocument.id.isEmpty()) return
+
+        val resolvedSegment = currentDocument.resolvePosition(position) ?: return
+        val segments = getSegments()
+        val index = if (position.segmentIndex in segments.indices && segments[position.segmentIndex].id == resolvedSegment.id) {
+            position.segmentIndex
+        } else {
+            segments.indexOfFirst { it.id == resolvedSegment.id }
+        }
+        
+        if (index >= 0) {
+            _currentSegmentIndex.value = index
+            _currentPosition.value = position
+            if (_readingState.value == ReadingSessionState.Completed) {
+                _readingState.value = ReadingSessionState.Stopped
+            }
+        }
+    }
+
+    /**
      * Sets error state on the reading session.
      */
     fun setError() {

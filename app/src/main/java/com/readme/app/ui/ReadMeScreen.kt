@@ -3,6 +3,7 @@ package com.readme.app.ui
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -32,10 +33,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.readme.app.R
 import com.readme.app.reading.ReadingSessionState
 import com.readme.app.settings.ReadMeViewModel
 import com.readme.app.speech.TtsState
@@ -61,6 +65,7 @@ fun ReadMeScreen(
     val selectedDocumentName by viewModel.selectedDocumentName.collectAsStateWithLifecycle()
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
     val pdfViewerState by viewModel.pdfViewerState.collectAsStateWithLifecycle()
+    val pdfViewportState by viewModel.pdfViewportState.collectAsStateWithLifecycle()
     
     val selectedVoice = availableVoices.find { it.id == settings.selectedVoice }
     val selectedVoiceDisplayName = selectedVoice?.displayName 
@@ -141,7 +146,13 @@ fun ReadMeScreen(
                     activePdf.uri?.let { pdfUri ->
                         PdfReaderView(
                             uri = pdfUri,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
+                            onViewportChanged = { viewportState ->
+                                viewModel.onPdfViewportChanged(viewportState)
+                            },
+                            onNavigatorReady = { navigator ->
+                                viewModel.setPdfPageNavigator(navigator)
+                            }
                         )
                     }
                 }
@@ -183,6 +194,15 @@ fun ReadMeScreen(
                             filePickerLauncher.launch(arrayOf("text/plain", "application/epub+zip", "application/pdf"))
                         }
                     )
+                    
+                    if (pdfViewportState.visiblePagesCount > 0) {
+                        ReadMeSecondaryButton(
+                            text = "Read from here",
+                            onClick = {
+                                viewModel.reconcilePdfReadingPosition()
+                            }
+                        )
+                    }
 
                     ReadMePrimaryButton(
                         text = if (isReading) "Reading..." else "Start Reading",
@@ -241,7 +261,19 @@ fun ReadMeScreen(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(32.dp)
             ) {
-                Spacer(modifier = Modifier.height(8.dp))
+                if (selectedDocumentName == null) {
+                    Image(
+                        painter = painterResource(id = R.drawable.welcome_logo),
+                        contentDescription = "ReadMe Welcome Logo",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .padding(top = 24.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
 
                 ReadMeVoiceSelector(
                     selectedVoice = selectedVoiceDisplayName,

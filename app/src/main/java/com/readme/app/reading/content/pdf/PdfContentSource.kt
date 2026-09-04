@@ -39,11 +39,15 @@ class PdfContentSource(
             }
         }
 
-        val parser = PdfDocumentParser()
+        val ocrEngine = com.readme.app.reading.content.pdf.ocr.PdfOcrEngine()
+        val parser = PdfDocumentParser(ocrEngine = ocrEngine)
         val documentId = safeUri.lastPathSegment ?: safeUri.toString().hashCode().toString()
         val document = try {
             parser.parse(pdfDocument, documentId, customDisplayName)
         } finally {
+            try {
+                ocrEngine.close()
+            } catch (e: Exception) {}
             // pdfDocument does not appear to implement Closeable directly in a way that compileDebugKotlin likes?
             // Actually it does: public interface androidx.pdf.PdfDocument extends java.io.Closeable
             try {

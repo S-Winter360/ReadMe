@@ -63,6 +63,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation("androidx.pdf:pdf-document-service:1.0.0-beta01")
     implementation("androidx.pdf:pdf-viewer:1.0.0-beta01")
+    implementation("androidx.pdf:pdf-ocr-play-services:1.0.0-beta01")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

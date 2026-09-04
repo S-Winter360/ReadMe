@@ -47,6 +47,7 @@ fun PdfReaderView(
     uri: Uri,
     modifier: Modifier = Modifier,
     onViewportChanged: (PdfViewportState) -> Unit = {},
+    onNavigatorReady: (PdfPageNavigator?) -> Unit = {},
     onError: (Throwable) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -55,6 +56,7 @@ fun PdfReaderView(
     var errorMessage by remember(uri) { mutableStateOf<String?>(null) }
 
     val currentOnViewportChanged by rememberUpdatedState(onViewportChanged)
+    val currentOnNavigatorReady by rememberUpdatedState(onNavigatorReady)
     val currentOnError by rememberUpdatedState(onError)
 
     LaunchedEffect(uri) {
@@ -74,6 +76,7 @@ fun PdfReaderView(
 
     DisposableEffect(uri) {
         onDispose {
+            currentOnNavigatorReady(null)
             try {
                 pdfDocument?.close()
             } catch (e: Exception) {
@@ -136,14 +139,17 @@ fun PdfReaderView(
                             listenerRef = listener
                             addOnViewportChangedListener(listener)
                             this.pdfDocument = document
+                            currentOnNavigatorReady(PdfViewPageNavigator { this })
                         }
                     },
                     update = { view ->
                         if (view.pdfDocument != document) {
                             view.pdfDocument = document
                         }
+                        currentOnNavigatorReady(PdfViewPageNavigator { view })
                     },
                     onRelease = { view ->
+                        currentOnNavigatorReady(null)
                         listenerRef?.let { listener ->
                             view.removeOnViewportChangedListener(listener)
                         }

@@ -1,13 +1,20 @@
 package com.readme.app.reading.content.pdf
 
+import android.graphics.Bitmap
+import android.util.Size
 import androidx.pdf.PdfDocument
 import com.readme.app.reading.ReadingDocument
 import com.readme.app.reading.ReadingSection
 import com.readme.app.reading.ReadingSegment
 import com.readme.app.reading.content.TxtDocumentParser
+import com.readme.app.reading.content.pdf.ocr.PdfOcrEngine
+import com.readme.app.reading.content.pdf.ocr.PdfOcrException
+import kotlinx.coroutines.isActive
+import kotlin.coroutines.coroutineContext
 
-class PdfDocumentParser {
-    
+class PdfDocumentParser(
+    private val ocrEngine: PdfOcrEngine? = null
+) {
     suspend fun parse(
         pdfDocument: PdfDocument,
         documentId: String,
@@ -17,28 +24,57 @@ class PdfDocumentParser {
         val sections = mutableListOf<ReadingSection>()
         val pageCount = pdfDocument.pageCount
         
-        var hasSelectableText = false
-
+        var hasValidText = false
+        
         for (page in 0 until pageCount) {
-            val pageContent = pdfDocument.getPageContent(page) ?: continue
-            val textContents = pageContent.textContents
+            if (!coroutineContext.isActive) break
             
-            if (textContents.isEmpty()) {
-                continue
+            val pageContent = pdfDocument.getPageContent(page)
+            val textContents = pageContent?.textContents
+            
+            var pageText = ""
+            var fromOcr = false
+            
+            if (textContents != null && textContents.isNotEmpty()) {
+                val textBuilder = java.lang.StringBuilder()
+                for (textContent in textContents) {
+                    textBuilder.append(textContent.text).append(" ")
+                }
+                pageText = textBuilder.toString()
             }
             
-            val pageText = StringBuilder()
-            for (textContent in textContents) {
-                pageText.append(textContent.text).append(" ")
+            var cleanText = normalizeText(pageText)
+            
+            // If no native text, fallback to OCR
+            if (cleanText.isBlank() && ocrEngine != null) {
+                try {
+                    val bitmapSource = pdfDocument.getPageBitmapSource(page)
+                    val bitmap = bitmapSource.getBitmap(Size(1200, 1600)) // Use reasonable default size
+                    
+                    val ocrResult = ocrEngine.recognize(bitmap)
+                    if (ocrResult.hasText) {
+                        cleanText = normalizeOcrText(ocrResult.text)
+                        fromOcr = true
+                    }
+                    bitmap.recycle()
+                    bitmapSource.close()
+                } catch (e: Exception) {
+                    // Ignore OCR errors per page and continue
+                }
             }
             
-            val cleanText = normalizeText(pageText.toString())
+            // If we found any text, build segments
             if (cleanText.isNotBlank()) {
-                hasSelectableText = true
+                hasValidText = true
                 val segments = TxtDocumentParser.splitIntoSentences(cleanText)
                 if (segments.isNotEmpty()) {
                     val sectionSegments = segments.mapIndexed { index, sentence ->
-                        ReadingSegment(id = "page:${page}:segment:${index}", text = sentence)
+                        val segmentId = if (fromOcr) {
+                            "pdf:$documentId:page:$page:ocr:$index"
+                        } else {
+                            "page:${page}:segment:${index}"
+                        }
+                        ReadingSegment(id = segmentId, text = sentence)
                     }
                     sections.add(
                         ReadingSection(
@@ -51,7 +87,7 @@ class PdfDocumentParser {
             }
         }
         
-        if (!hasSelectableText) {
+        if (!hasValidText) {
             throw PdfNoSelectableTextException("No selectable text was found in this PDF.")
         }
         
@@ -67,6 +103,15 @@ class PdfDocumentParser {
             .replace(Regex("(?<=\\w)-\\s*\\r?\\n\\s*(?=\\w)"), "") // Hyphenated word break
             .replace(Regex("\\r?\\n"), " ") // New lines to spaces
             .replace(Regex("\\s+"), " ") // Multiple spaces to single space
+            .trim()
+    }
+    
+    private fun normalizeOcrText(text: String): String {
+        // More conservative normalisation for OCR
+        return text
+            .replace(Regex("(?<=\\w)-\\s*\\r?\\n\\s*(?=\\w)"), "") // Hyphenated word break
+            .replace(Regex("([^\\r\\n])\\r?\\n([^\\r\\n])"), "$1 $2") // New lines within paragraphs to spaces
+            .replace(Regex("\\s{2,}"), " ") // Multiple spaces to single space
             .trim()
     }
 }
