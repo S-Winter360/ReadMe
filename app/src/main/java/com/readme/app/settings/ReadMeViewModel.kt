@@ -6,21 +6,32 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.readme.app.reading.ActiveDocumentState
+import com.readme.app.reading.ActiveReadingSessionState
+import com.readme.app.reading.DocumentLoadState
 import com.readme.app.reading.ReadingDocument
+import com.readme.app.reading.ReadingDocumentSourceType
 import com.readme.app.reading.ReadingEngine
 import com.readme.app.reading.ReadingPosition
 import com.readme.app.reading.ReadingSegment
+import com.readme.app.reading.ReadingSessionCoordinator
 import com.readme.app.reading.ReadingSessionState
 import com.readme.app.reading.content.DetectedFormat
 import com.readme.app.reading.content.DocumentFormatDetector
 import com.readme.app.reading.content.ReadingContentSource
-import com.readme.app.reading.content.SampleContentSource
 import com.readme.app.reading.content.TxtContentSource
 import com.readme.app.reading.content.epub.EpubContentSource
 import com.readme.app.reading.content.pdf.PdfContentSource
 import com.readme.app.reading.content.pdf.PdfNotSupportedException
 import com.readme.app.reading.content.pdf.PdfReadingPositionMapper
 import com.readme.app.reading.content.pdf.PdfReadingSyncState
+import com.readme.app.reading.progress.PersistentReadingProgressRepository
+import com.readme.app.reading.progress.ReadingProgress
+import com.readme.app.reading.progress.ReadingProgressRepository
+import com.readme.app.reading.progress.ReadingProgressValidator
+import com.readme.app.reading.progress.SavedProgressState
+import com.readme.app.reading.service.ReadMeReadingService
+import com.readme.app.reading.service.ReadMeReadingSessionRuntime
 import com.readme.app.speech.ReadMeSpeechEngine
 import com.readme.app.speech.ReadMeVoice
 import com.readme.app.speech.SpeechEngineListener
@@ -30,6 +41,7 @@ import com.readme.app.ui.pdf.PdfPageNavigator
 import com.readme.app.ui.pdf.PdfViewerState
 import com.readme.app.ui.pdf.PdfViewportState
 import com.readme.app.ui.pdf.PendingPdfNavigation
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,16 +54,24 @@ import kotlinx.coroutines.launch
 
 class ReadMeViewModel @JvmOverloads constructor(
     application: Application,
-    private val contentSource: ReadingContentSource = SampleContentSource()
+    private val contentSource: ReadingContentSource? = null,
+    val progressRepository: ReadingProgressRepository = PersistentReadingProgressRepository(application),
+    val sessionRuntime: ReadMeReadingSessionRuntime = ReadMeReadingSessionRuntime.getInstance(application)
 ) : AndroidViewModel(application) {
 
-    private val repository = ReadMeSettingsRepository(application)
+    private val repository = sessionRuntime.settingsRepository ?: ReadMeSettingsRepository(application)
     
-    val speechEngine = ReadMeSpeechEngine(application)
-    val readingEngine = ReadingEngine()
+    val speechEngine = sessionRuntime.speechEngine
+    val readingEngine = sessionRuntime.readingEngine
+    val sessionCoordinator = sessionRuntime.sessionCoordinator
 
-    private var activeContentSource: ReadingContentSource = contentSource
+    private var activeContentSource: ReadingContentSource? = contentSource
     private var pdfMapper: PdfReadingPositionMapper? = null
+
+    val activeDocumentState: StateFlow<ActiveDocumentState> = sessionCoordinator.activeDocumentState
+    val readingSessionState: StateFlow<ActiveReadingSessionState> = sessionCoordinator.readingSessionState
+
+    val savedProgressState: StateFlow<SavedProgressState> = sessionRuntime.savedProgressState
 
     private val _selectedDocumentName = MutableStateFlow<String?>(null)
     val selectedDocumentName: StateFlow<String?> = _selectedDocumentName.asStateFlow()
@@ -83,20 +103,11 @@ class ReadMeViewModel @JvmOverloads constructor(
         initialValue = ReadMeSettings()
     )
 
-    private var activeSessionId: Long = 0L
     private var restartJob: Job? = null
+    private var documentLoadJob: Job? = null
 
     init {
-        // Load initial document from content source
-        viewModelScope.launch {
-            try {
-                val document = activeContentSource.load()
-                readingEngine.loadDocument(document)
-            } catch (e: Exception) {
-                readingEngine.setError()
-            }
-        }
-
+        // Collect reading position changes to update sync and navigation
         viewModelScope.launch {
             readingEngine.currentPosition.collect { position ->
                 updatePdfSyncState()
@@ -104,67 +115,60 @@ class ReadMeViewModel @JvmOverloads constructor(
             }
         }
 
-        speechEngine.setSpeechListener(object : SpeechEngineListener {
-            override fun onSegmentStarted(segmentId: String, sessionId: Long) {
-                // Segment speech started
-            }
-
-            override fun onSegmentCompleted(segmentId: String, sessionId: Long) {
-                viewModelScope.launch {
-                    handleSegmentCompleted(segmentId, sessionId)
-                }
-            }
-
-            override fun onSegmentError(segmentId: String, sessionId: Long, errorCode: Int) {
-                viewModelScope.launch {
-                    handleSegmentError(segmentId, sessionId, errorCode)
-                }
-            }
-        })
-
+        // Collect reading session state to update navigation and sync state
         viewModelScope.launch {
-            combine(speechEngine.availableVoices, repository.settingsFlow) { voices, currentSettings ->
-                voices to currentSettings
-            }.collect { (voices, currentSettings) ->
-                if (voices.isNotEmpty()) {
-                    val currentVoiceId = currentSettings.selectedVoice
-                    val voiceExists = voices.any { it.id == currentVoiceId }
-                    if (!voiceExists || currentVoiceId == "natural_voice" || currentVoiceId.isBlank()) {
-                        // Fallback to top-ranked available voice (device locale preferred)
-                        val defaultVoice = voices.first()
-                        repository.updateSelectedVoice(defaultVoice.id)
+            readingSessionState.collect { state ->
+                if (state.isReading) {
+                    navigationCoordinator.onReadingStarted(readingEngine.currentPosition.value)
+                } else {
+                    navigationCoordinator.onReadingStopped()
+                }
+                updatePdfSyncState()
+            }
+        }
+
+        // Keep legacy selectedDocumentName and loadError flows synchronized with activeDocumentState
+        viewModelScope.launch {
+            activeDocumentState.collect { state ->
+                when (state.loadState) {
+                    is DocumentLoadState.NoDocument -> {
+                        _selectedDocumentName.value = null
+                        _loadError.value = null
+                    }
+                    is DocumentLoadState.Loading -> {
+                        _selectedDocumentName.value = state.displayName.ifBlank { null }
+                        _loadError.value = null
+                    }
+                    is DocumentLoadState.Loaded -> {
+                        _selectedDocumentName.value = state.displayName.ifBlank { state.title }.ifBlank { null }
+                        _loadError.value = null
+                    }
+                    is DocumentLoadState.Error -> {
+                        _selectedDocumentName.value = null
+                        _loadError.value = state.loadState.message
                     }
                 }
             }
         }
-    }
 
-    private fun handleSegmentCompleted(segmentId: String, sessionId: Long) {
-        if (sessionId != activeSessionId || activeSessionId == 0L) return
-        if (readingEngine.readingState.value != ReadingSessionState.Reading) return
-
-        val nextSegment = readingEngine.advance()
-        if (nextSegment != null) {
-            val currentSettings = settings.value
-            speechEngine.speakSegment(
-                segmentId = nextSegment.id,
-                text = nextSegment.text,
-                sessionId = activeSessionId,
-                voiceId = currentSettings.selectedVoice,
-                speed = currentSettings.speechSpeed,
-                pitch = currentSettings.speechPitch,
-                volume = currentSettings.speechVolume
-            )
-        } else {
-            navigationCoordinator.setReadingState(ReadingSessionState.Completed)
-            updatePdfSyncState()
+        // Load initial document if provided
+        if (contentSource != null) {
+            val token = sessionCoordinator.startLoading("Document")
+            viewModelScope.launch {
+                try {
+                    val document = contentSource.load()
+                    if (sessionCoordinator.isCurrentLoadToken(token)) {
+                        sessionCoordinator.onDocumentLoaded(token, document, document.title)
+                        restoreProgressIfAvailable(document.id)
+                    }
+                } catch (e: Exception) {
+                    if (sessionCoordinator.isCurrentLoadToken(token)) {
+                        sessionCoordinator.onDocumentLoadFailed(token, "Unable to load document")
+                        sessionRuntime.clearSavedProgressState()
+                    }
+                }
+            }
         }
-    }
-
-    private fun handleSegmentError(segmentId: String, sessionId: Long, errorCode: Int) {
-        if (sessionId != activeSessionId || activeSessionId == 0L) return
-        readingEngine.setError()
-        speechEngine.stop()
     }
 
     private fun scheduleRestart(
@@ -224,6 +228,13 @@ class ReadMeViewModel @JvmOverloads constructor(
         scheduleRestart(pitch = pitch)
     }
 
+    fun setSystemBubbleEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateSystemBubbleEnabled(enabled)
+        }
+        ReadMeReadingService.syncService(getApplication())
+    }
+
     fun selectTextFile(uri: Uri) {
         selectDocument(uri)
     }
@@ -231,6 +242,7 @@ class ReadMeViewModel @JvmOverloads constructor(
     fun selectDocument(uri: Uri) {
         stopReading()
         navigationCoordinator.clearDocument()
+        documentLoadJob?.cancel()
         try {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
             getApplication<Application>().contentResolver.takePersistableUriPermission(uri, flags)
@@ -243,132 +255,137 @@ class ReadMeViewModel @JvmOverloads constructor(
         val mimeType = resolver.getType(uri)
         val format = DocumentFormatDetector.detect(mimeType, displayName)
 
-        _selectedDocumentName.value = displayName
-        _loadError.value = null
+        // Stop any active reading before loading a new document
+        if (sessionCoordinator.readingSessionState.value.isReading) {
+            stopReading()
+        }
+
+        // Clear PDF visual state
+        pdfMapper = null
+        sessionRuntime.clearSavedProgressState()
+        _pdfViewportState.value = PdfViewportState()
+        if (format == DetectedFormat.PDF) {
+            _pdfViewerState.value = PdfViewerState.Loading(uri)
+        } else {
+            _pdfViewerState.value = PdfViewerState.Empty
+        }
+        updatePdfSyncState()
+
+        val loadToken = sessionCoordinator.startLoading(displayName)
 
         when (format) {
             DetectedFormat.PDF -> {
-                // Clear any existing visual PDF state immediately to prevent showing stale content
-                pdfMapper = null
-                _pdfViewportState.value = PdfViewportState()
-                _pdfViewerState.value = PdfViewerState.Loading(uri)
-                updatePdfSyncState()
-
                 val pdfSource = PdfContentSource(getApplication(), uri, displayName)
                 activeContentSource = pdfSource
 
-                viewModelScope.launch {
+                documentLoadJob = viewModelScope.launch {
                     try {
                         val document = pdfSource.load()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+
                         if (document.sections.isEmpty() || document.allSegments().isEmpty()) {
-                            _loadError.value = "No readable text found in selected PDF"
-                            _selectedDocumentName.value = null
-                            pdfMapper = null
-                            _pdfViewportState.value = PdfViewportState()
+                            sessionCoordinator.onDocumentLoadFailed(loadToken, "No readable text found in selected PDF")
                             _pdfViewerState.value = PdfViewerState.Empty
-                            readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                            readingEngine.setError()
+                            sessionRuntime.clearSavedProgressState()
                             updatePdfSyncState()
                         } else {
-                            readingEngine.loadDocument(document)
+                            sessionCoordinator.onDocumentLoaded(loadToken, document, displayName)
+                            restoreProgressIfAvailable(document.id)
                             val mapper = PdfReadingPositionMapper.fromDocument(document)
                             pdfMapper = mapper
                             navigationCoordinator.setPdfDocument(mapper, isActive = true)
                             _pdfViewerState.value = PdfViewerState.Active(uri, displayName)
                             updatePdfSyncState()
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: com.readme.app.reading.content.pdf.PdfPasswordRequiredException) {
-                        _loadError.value = "Password required for this PDF."
-                        _selectedDocumentName.value = null
-                        pdfMapper = null
-                        _pdfViewportState.value = PdfViewportState()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "Password required for this PDF.")
                         _pdfViewerState.value = PdfViewerState.Empty
-                        readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                        readingEngine.setError()
+                        updatePdfSyncState()
+                    } catch (e: com.readme.app.reading.content.pdf.ocr.PdfOcrModelUnavailableException) {
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "OCR text recognition is not ready yet.")
+                        _pdfViewerState.value = PdfViewerState.Empty
+                        updatePdfSyncState()
+                    } catch (e: com.readme.app.reading.content.pdf.ocr.PdfOcrUnavailableException) {
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "OCR is currently unavailable on this device.")
+                        _pdfViewerState.value = PdfViewerState.Empty
+                        updatePdfSyncState()
+                    } catch (e: com.readme.app.reading.content.pdf.ocr.PdfOcrInitializationException) {
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "OCR is currently unavailable on this device.")
+                        _pdfViewerState.value = PdfViewerState.Empty
                         updatePdfSyncState()
                     } catch (e: com.readme.app.reading.content.pdf.PdfNoSelectableTextException) {
-                        _loadError.value = "No selectable text was found in this PDF."
-                        _selectedDocumentName.value = null
-                        pdfMapper = null
-                        _pdfViewportState.value = PdfViewportState()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "No selectable text was found in this PDF.")
                         _pdfViewerState.value = PdfViewerState.Empty
-                        readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                        readingEngine.setError()
                         updatePdfSyncState()
                     } catch (e: Exception) {
-                        _loadError.value = "Unable to read selected PDF file"
-                        _selectedDocumentName.value = null
-                        pdfMapper = null
-                        _pdfViewportState.value = PdfViewportState()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "Unable to read selected PDF file")
                         _pdfViewerState.value = PdfViewerState.Empty
-                        readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                        readingEngine.setError()
                         updatePdfSyncState()
                     }
                 }
             }
             DetectedFormat.EPUB -> {
-                pdfMapper = null
-                _pdfViewportState.value = PdfViewportState()
-                _pdfViewerState.value = PdfViewerState.Empty
-                updatePdfSyncState()
-
                 val epubSource = EpubContentSource(getApplication(), uri, displayName)
                 activeContentSource = epubSource
 
-                viewModelScope.launch {
+                documentLoadJob = viewModelScope.launch {
                     try {
                         val document = epubSource.load()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== epubSource) return@launch
+
                         if (document.sections.isEmpty() || document.allSegments().isEmpty()) {
-                            _loadError.value = "No readable text found in selected EPUB"
-                            _selectedDocumentName.value = null
-                            readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                            readingEngine.setError()
+                            sessionCoordinator.onDocumentLoadFailed(loadToken, "No readable text found in selected EPUB")
+                            sessionRuntime.clearSavedProgressState()
                         } else {
-                            readingEngine.loadDocument(document)
+                            sessionCoordinator.onDocumentLoaded(loadToken, document, displayName)
+                            restoreProgressIfAvailable(document.id)
                         }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: com.readme.app.reading.content.epub.EpubDrmException) {
-                        _loadError.value = "DRM-protected EPUB files are not supported"
-                        _selectedDocumentName.value = null
-                        readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                        readingEngine.setError()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== epubSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "DRM-protected EPUB files are not supported")
                     } catch (e: Exception) {
-                        _loadError.value = "Unable to read selected EPUB file"
-                        _selectedDocumentName.value = null
-                        readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                        readingEngine.setError()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== epubSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "Unable to read selected EPUB file")
                     }
                 }
             }
             DetectedFormat.TXT -> {
-                pdfMapper = null
-                _pdfViewportState.value = PdfViewportState()
-                _pdfViewerState.value = PdfViewerState.Empty
-                updatePdfSyncState()
-
                 val txtSource = TxtContentSource(getApplication(), uri, displayName)
                 activeContentSource = txtSource
 
-                viewModelScope.launch {
+                documentLoadJob = viewModelScope.launch {
                     try {
                         val document = txtSource.load()
-                        readingEngine.loadDocument(document)
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== txtSource) return@launch
+
+                        if (document.sections.isEmpty() || document.allSegments().isEmpty()) {
+                            sessionCoordinator.onDocumentLoadFailed(loadToken, "No readable text found in selected text file")
+                            sessionRuntime.clearSavedProgressState()
+                        } else {
+                            sessionCoordinator.onDocumentLoaded(loadToken, document, displayName)
+                            restoreProgressIfAvailable(document.id)
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
-                        _loadError.value = "Unable to read selected text file"
-                        _selectedDocumentName.value = null
-                        readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                        readingEngine.setError()
+                        if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== txtSource) return@launch
+                        sessionCoordinator.onDocumentLoadFailed(loadToken, "Unable to read selected text file")
                     }
                 }
             }
             DetectedFormat.UNKNOWN -> {
-                pdfMapper = null
-                _pdfViewportState.value = PdfViewportState()
+                sessionCoordinator.onDocumentLoadFailed(loadToken, "Unsupported document format")
                 _pdfViewerState.value = PdfViewerState.Empty
-                _loadError.value = "Unsupported document format"
-                _selectedDocumentName.value = null
-                readingEngine.loadDocument(ReadingDocument(id = "", title = "", sections = emptyList()))
-                readingEngine.setError()
                 updatePdfSyncState()
             }
         }
@@ -438,84 +455,74 @@ class ReadMeViewModel @JvmOverloads constructor(
      * Phase 8F: Explicitly requests that reading continue from the PDF page currently being viewed.
      */
     fun reconcilePdfReadingPosition() {
+        if (activeDocumentState.value.sourceType != ReadingDocumentSourceType.PDF) return
+        val isPdfActive = _pdfViewerState.value is PdfViewerState.Active
+        if (!isPdfActive || pdfMapper == null) return
+
         val position = com.readme.app.ui.pdf.PdfPositionReconciler.reconcile(
             document = readingEngine.currentDocument,
             mapper = pdfMapper,
             viewportState = _pdfViewportState.value,
-            isPdfActive = _pdfViewerState.value is PdfViewerState.Active
+            isPdfActive = true
         ) ?: return
         
-        val wasReading = readingEngine.readingState.value == ReadingSessionState.Reading
+        val wasReading = sessionCoordinator.readingSessionState.value.isReading
         
         if (wasReading) {
-            // Stop speech and engine safely
-            activeSessionId = 0L
-            speechEngine.stop()
-            readingEngine.stop()
+            // Stop speech safely
+            stopReading()
             
             // Set the new position and resume reading
-            readingEngine.setPosition(position)
+            sessionCoordinator.setPosition(position)
+            sessionRuntime.saveCurrentProgress(isCompleted = false)
             startReading()
         } else {
-            readingEngine.setPosition(position)
+            sessionCoordinator.setPosition(position)
+            sessionRuntime.saveCurrentProgress(isCompleted = false)
         }
         updatePdfSyncState()
     }
 
     fun startReading() {
-        restartJob?.cancel()
-        val currentSettings = settings.value
-        activeSessionId = System.currentTimeMillis()
-        val thisSessionId = activeSessionId
-
-        viewModelScope.launch {
-            if (readingEngine.totalSegments() == 0 && _selectedDocumentName.value == null) {
-                try {
-                    val document = activeContentSource.load()
-                    readingEngine.loadDocument(document)
-                } catch (e: Exception) {
-                    readingEngine.setError()
-                    return@launch
-                }
-            }
-
-            if (activeSessionId != thisSessionId || activeSessionId == 0L) return@launch
-
-            val segmentToSpeak = if (readingEngine.readingState.value == ReadingSessionState.Stopped && readingEngine.currentPosition.value != null) {
-                readingEngine.resumeFromCurrentPosition()
-            } else {
-                readingEngine.startFromBeginning()
-            }
-
-            if (segmentToSpeak != null) {
-                navigationCoordinator.onReadingStarted(readingEngine.currentPosition.value)
-                updatePdfSyncState()
-                speechEngine.speakSegment(
-                    segmentId = segmentToSpeak.id,
-                    text = segmentToSpeak.text,
-                    sessionId = thisSessionId,
-                    voiceId = currentSettings.selectedVoice,
-                    speed = currentSettings.speechSpeed,
-                    pitch = currentSettings.speechPitch,
-                    volume = currentSettings.speechVolume
-                )
-            }
+        if (!sessionCoordinator.hasActiveDocument) {
+            Log.w("ReadMeViewModel", "startReading called but no active document is loaded")
+            return
         }
+        restartJob?.cancel()
+        ReadMeReadingService.startReading(getApplication())
     }
 
     fun stopReading() {
         restartJob?.cancel()
-        activeSessionId = 0L
+        ReadMeReadingService.stopReading(getApplication())
         navigationCoordinator.onReadingStopped()
-        readingEngine.stop()
-        speechEngine.stop()
+        updatePdfSyncState()
+    }
+
+    fun restartReadingFromBeginning() {
+        if (!sessionCoordinator.hasActiveDocument) {
+            Log.w("ReadMeViewModel", "restartReadingFromBeginning called but no active document is loaded")
+            return
+        }
+        stopReading()
+        sessionRuntime.restartReadingFromBeginning()
+        ReadMeReadingService.startReading(getApplication())
+    }
+
+    private fun saveCurrentProgress(isCompleted: Boolean = false) {
+        sessionRuntime.saveCurrentProgress(isCompleted)
+    }
+
+    private suspend fun restoreProgressIfAvailable(documentId: String) {
+        sessionRuntime.restoreProgressIfAvailable(documentId)
         updatePdfSyncState()
     }
 
     override fun onCleared() {
         super.onCleared()
+        documentLoadJob?.cancel()
         restartJob?.cancel()
-        readingEngine.stop()
-        speechEngine.shutdown()
+        // Phase 9E: Do NOT stop reading or shutdown speechEngine here.
+        // Active background reading is owned and sustained by ReadMeReadingService / ReadMeReadingSessionRuntime.
     }
 }

@@ -31,7 +31,14 @@ class TxtContentSource(
             ?: throw IOException("Cannot open input stream for URI: $uri")
 
         val rawText = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        TxtDocumentParser.parse(title = fileName, rawText = rawText)
+        val cleanTitleSlug = fileName
+            .filter { it.isLetterOrDigit() }
+            .lowercase()
+            .take(30)
+            .ifEmpty { "txt" }
+        val sourceHash = uri.toString().hashCode().toUInt()
+        val docId = "txt_${cleanTitleSlug}_$sourceHash"
+        TxtDocumentParser.parse(title = fileName, rawText = rawText, documentId = docId)
     }
 
     companion object {

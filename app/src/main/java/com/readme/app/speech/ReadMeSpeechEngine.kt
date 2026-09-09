@@ -32,7 +32,7 @@ interface SpeechEngineListener {
     fun onSegmentError(segmentId: String, sessionId: Long, errorCode: Int)
 }
 
-class ReadMeSpeechEngine(context: Context) {
+open class ReadMeSpeechEngine(context: Context? = null) {
 
     private val lock = Any()
     private var tts: TextToSpeech? = null
@@ -44,6 +44,7 @@ class ReadMeSpeechEngine(context: Context) {
     val availableVoices: StateFlow<List<ReadMeVoice>> = _availableVoices.asStateFlow()
 
     private var speechListener: SpeechEngineListener? = null
+    val speechListenerForTesting: SpeechEngineListener? get() = speechListener
 
     private var activeSessionId: Long = 0L
     private var activeSubId: Long = 0L
@@ -61,19 +62,25 @@ class ReadMeSpeechEngine(context: Context) {
     }
 
     init {
-        _state.value = TtsState.Initializing
-        tts = TextToSpeech(context.applicationContext) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                setupUtteranceListener()
-                _state.value = TtsState.Ready
-                discoverVoices()
-            } else {
-                _state.value = TtsState.Error
+        if (context != null) {
+            _state.value = TtsState.Initializing
+            tts = TextToSpeech(context.applicationContext) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    setupUtteranceListener()
+                    _state.value = TtsState.Ready
+                    discoverVoices()
+                } else {
+                    _state.value = TtsState.Error
+                }
             }
         }
     }
 
-    fun setSpeechListener(listener: SpeechEngineListener?) {
+    fun setStateForTesting(state: TtsState) {
+        _state.value = state
+    }
+
+    open fun setSpeechListener(listener: SpeechEngineListener?) {
         synchronized(lock) {
             this.speechListener = listener
         }
@@ -214,7 +221,7 @@ class ReadMeSpeechEngine(context: Context) {
     /**
      * Synthesizes a single segment.
      */
-    fun speakSegment(
+    open fun speakSegment(
         segmentId: String,
         text: String,
         sessionId: Long,
@@ -247,7 +254,7 @@ class ReadMeSpeechEngine(context: Context) {
      * Updates speech settings and immediately restarts synthesis of the active segment.
      * Stale callbacks from the previous sub-session are invalidated via incremented activeSubId.
      */
-    fun updateSettingsAndRestart(
+    open fun updateSettingsAndRestart(
         voiceId: String,
         speed: Float,
         pitch: Float,
@@ -319,7 +326,7 @@ class ReadMeSpeechEngine(context: Context) {
         }
     }
 
-    fun stop() {
+    open fun stop() {
         synchronized(lock) {
             isSpeakingActive = false
             activeSessionId = 0L
@@ -335,7 +342,7 @@ class ReadMeSpeechEngine(context: Context) {
         }
     }
 
-    fun shutdown() {
+    open fun shutdown() {
         synchronized(lock) {
             isSpeakingActive = false
             activeSessionId = 0L

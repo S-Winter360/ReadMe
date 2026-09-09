@@ -1,6 +1,9 @@
 package com.readme.app.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -23,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -34,19 +38,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.readme.app.R
 import com.readme.app.reading.ReadingSessionState
+import com.readme.app.reading.progress.SavedProgressState
 import com.readme.app.settings.ReadMeViewModel
 import com.readme.app.speech.TtsState
 import com.readme.app.ui.components.ReadMePrimaryButton
 import com.readme.app.ui.components.ReadMeSecondaryButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
+import com.readme.app.ui.components.ReadMeFloatingBubble
 import com.readme.app.ui.pdf.PdfReaderView
 import com.readme.app.ui.pdf.PdfViewerState
 import java.util.Locale
@@ -66,12 +74,23 @@ fun ReadMeScreen(
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
     val pdfViewerState by viewModel.pdfViewerState.collectAsStateWithLifecycle()
     val pdfViewportState by viewModel.pdfViewportState.collectAsStateWithLifecycle()
+    val activeDocumentState by viewModel.activeDocumentState.collectAsStateWithLifecycle()
+    val readingSessionState by viewModel.readingSessionState.collectAsStateWithLifecycle()
+    val savedProgressState by viewModel.savedProgressState.collectAsStateWithLifecycle()
     
     val selectedVoice = availableVoices.find { it.id == settings.selectedVoice }
     val selectedVoiceDisplayName = selectedVoice?.displayName 
         ?: if (availableVoices.isEmpty()) "No voices available" else availableVoices.firstOrNull()?.displayName ?: ""
     
-    val isReading = readingState == ReadingSessionState.Reading || ttsState == TtsState.Speaking
+    val isReading = readingSessionState.isReading
+    
+    val primaryButtonText = when {
+        activeDocumentState.isLoading -> "Loading..."
+        isReading -> "Reading..."
+        savedProgressState is SavedProgressState.Resumable -> "Resume Reading"
+        savedProgressState is SavedProgressState.Completed -> "Restart Reading"
+        else -> "Start Reading"
+    }
     
     var menuExpanded by remember { mutableStateOf(false) }
     
@@ -82,6 +101,39 @@ fun ReadMeScreen(
     ) { uri: Uri? ->
         if (uri != null) {
             viewModel.selectDocument(uri)
+        }
+    }
+
+    val context = LocalContext.current
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        if (activeDocumentState.hasActiveDocument) {
+            viewModel.startReading()
+        }
+    }
+
+    val onStartReading = {
+        if (activeDocumentState.hasActiveDocument) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                viewModel.startReading()
+            }
+        }
+    }
+
+    val onRestartReading = {
+        if (activeDocumentState.hasActiveDocument) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                viewModel.restartReadingFromBeginning()
+            }
         }
     }
     
@@ -125,15 +177,16 @@ fun ReadMeScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
-        if (pdfViewerState is PdfViewerState.Active) {
-            val activePdf = pdfViewerState as PdfViewerState.Active
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
+        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            if (pdfViewerState is PdfViewerState.Active) {
+                val activePdf = pdfViewerState as PdfViewerState.Active
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+
                 // Visual PDF viewer occupying main available space
                 Box(
                     modifier = Modifier
@@ -166,7 +219,16 @@ fun ReadMeScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (selectedDocumentName != null) {
+                    if (activeDocumentState.isLoading) {
+                        Text(
+                            text = "Loading content...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    } else if (selectedDocumentName != null) {
                         Text(
                             text = "Selected: $selectedDocumentName",
                             style = MaterialTheme.typography.bodyMedium,
@@ -205,15 +267,35 @@ fun ReadMeScreen(
                     }
 
                     ReadMePrimaryButton(
-                        text = if (isReading) "Reading..." else "Start Reading",
+                        text = primaryButtonText,
+                        enabled = !activeDocumentState.isLoading,
                         onClick = {
                             if (isReading) {
                                 viewModel.stopReading()
                             } else {
-                                viewModel.startReading()
+                                onStartReading()
                             }
                         }
                     )
+
+                    if (savedProgressState is SavedProgressState.Resumable && !isReading) {
+                        val progress = (savedProgressState as SavedProgressState.Resumable).progress
+                        Text(
+                            text = "Saved progress: sentence ${progress.segmentIndex + 1}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        TextButton(
+                            onClick = { onRestartReading() }
+                        ) {
+                            Text(
+                                text = "Start from beginning",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
 
                     ReadMeVoiceSelector(
                         selectedVoice = selectedVoiceDisplayName,
@@ -249,6 +331,10 @@ fun ReadMeScreen(
                         steps = 3
                     )
 
+                    SystemBubbleToggle(
+                        enabled = settings.isSystemBubbleEnabled,
+                        onEnabledChange = { viewModel.setSystemBubbleEnabled(it) }
+                    )
                     Spacer(modifier = Modifier.height(16.dp))
                 }
             }
@@ -256,7 +342,6 @@ fun ReadMeScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
                     .padding(horizontal = 24.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(32.dp)
@@ -309,6 +394,10 @@ fun ReadMeScreen(
                     steps = 3
                 )
                 
+                SystemBubbleToggle(
+                    enabled = settings.isSystemBubbleEnabled,
+                    onEnabledChange = { viewModel.setSystemBubbleEnabled(it) }
+                )
                 Spacer(modifier = Modifier.weight(1f, fill = false))
 
                 Column(
@@ -318,7 +407,16 @@ fun ReadMeScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (selectedDocumentName != null) {
+                    if (activeDocumentState.isLoading) {
+                        Text(
+                            text = "Loading content...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    } else if (selectedDocumentName != null) {
                         Text(
                             text = "Selected: $selectedDocumentName",
                             style = MaterialTheme.typography.bodyMedium,
@@ -348,17 +446,96 @@ fun ReadMeScreen(
                     )
 
                     ReadMePrimaryButton(
-                        text = if (isReading) "Reading..." else "Start Reading",
+                        text = primaryButtonText,
+                        enabled = !activeDocumentState.isLoading && (isReading || activeDocumentState.hasActiveDocument),
                         onClick = {
                             if (isReading) {
                                 viewModel.stopReading()
                             } else {
-                                viewModel.startReading()
+                                onStartReading()
                             }
                         }
                     )
+
+                    if (savedProgressState is SavedProgressState.Resumable && !isReading) {
+                        val progress = (savedProgressState as SavedProgressState.Resumable).progress
+                        Text(
+                            text = "Saved progress: sentence ${progress.segmentIndex + 1}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        TextButton(
+                            onClick = { onRestartReading() }
+                        ) {
+                            Text(
+                                text = "Start from beginning",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                 }
             }
         }
+
+        ReadMeFloatingBubble(
+            sessionState = readingSessionState,
+            activeDocumentState = activeDocumentState,
+            onToggleReading = {
+                if (isReading) {
+                    viewModel.stopReading()
+                } else {
+                    onStartReading()
+                }
+            }
+        )
+    }
+}
+}
+
+
+@androidx.compose.runtime.Composable
+fun SystemBubbleToggle(
+    enabled: Boolean,
+    onEnabledChange: (Boolean) -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val overlayPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (android.provider.Settings.canDrawOverlays(context)) {
+            onEnabledChange(true)
+        }
+    }
+
+    androidx.compose.foundation.layout.Row(
+        modifier = androidx.compose.ui.Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+    ) {
+        androidx.compose.material3.Text(
+            text = "Enable Floating ReadMe",
+            style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+            color = androidx.compose.material3.MaterialTheme.colorScheme.onBackground
+        )
+        androidx.compose.material3.Switch(
+            checked = enabled,
+            onCheckedChange = { checked ->
+                if (checked) {
+                    if (android.provider.Settings.canDrawOverlays(context)) {
+                        onEnabledChange(true)
+                    } else {
+                        val intent = android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:${context.packageName}")
+                        )
+                        overlayPermissionLauncher.launch(intent)
+                    }
+                } else {
+                    onEnabledChange(false)
+                }
+            }
+        )
     }
 }

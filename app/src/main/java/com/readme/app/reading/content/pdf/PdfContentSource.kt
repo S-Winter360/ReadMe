@@ -22,7 +22,8 @@ class PdfNotSupportedException(message: String = "PDF support is being prepared.
 class PdfContentSource(
     private val context: Context? = null,
     val uri: Uri? = null,
-    val customDisplayName: String = ""
+    val customDisplayName: String = "",
+    private val ocrEngineFactory: (() -> com.readme.app.reading.content.pdf.ocr.PdfOcrEngine)? = null
 ) : ReadingContentSource {
 
     override suspend fun load(): ReadingDocument = withContext(Dispatchers.IO) {
@@ -39,7 +40,7 @@ class PdfContentSource(
             }
         }
 
-        val ocrEngine = com.readme.app.reading.content.pdf.ocr.PdfOcrEngine()
+        val ocrEngine = ocrEngineFactory?.invoke() ?: com.readme.app.reading.content.pdf.ocr.PdfOcrEngine()
         val parser = PdfDocumentParser(ocrEngine = ocrEngine)
         val documentId = safeUri.lastPathSegment ?: safeUri.toString().hashCode().toString()
         val document = try {
@@ -48,19 +49,11 @@ class PdfContentSource(
             try {
                 ocrEngine.close()
             } catch (e: Exception) {}
-            // pdfDocument does not appear to implement Closeable directly in a way that compileDebugKotlin likes?
-            // Actually it does: public interface androidx.pdf.PdfDocument extends java.io.Closeable
             try {
                 pdfDocument.close()
-            } catch (e: Exception) {
-                // Ignore close errors
-            }
+            } catch (e: Exception) {}
         }
 
-        // Apply metadata source type
-        document.copy(
-            sections = document.sections // Keep as is, ReadingDocument doesn't have metadata field here?
-        )
         return@withContext document
     }
 

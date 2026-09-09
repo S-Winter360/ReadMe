@@ -1,15 +1,16 @@
 package com.readme.app.reading.content.pdf
 
-import android.graphics.Bitmap
-import android.util.Size
 import androidx.pdf.PdfDocument
 import com.readme.app.reading.ReadingDocument
+import com.readme.app.reading.ReadingDocumentMetadata
+import com.readme.app.reading.ReadingDocumentSourceType
 import com.readme.app.reading.ReadingSection
 import com.readme.app.reading.ReadingSegment
 import com.readme.app.reading.content.TxtDocumentParser
 import com.readme.app.reading.content.pdf.ocr.PdfOcrEngine
-import com.readme.app.reading.content.pdf.ocr.PdfOcrException
-import kotlinx.coroutines.isActive
+import com.readme.app.reading.content.pdf.ocr.PdfOcrTextNormalizer
+import com.readme.app.reading.content.pdf.ocr.PdfPageRasterizer
+import kotlinx.coroutines.ensureActive
 import kotlin.coroutines.coroutineContext
 
 class PdfDocumentParser(
@@ -23,18 +24,26 @@ class PdfDocumentParser(
     ): ReadingDocument {
         val sections = mutableListOf<ReadingSection>()
         val pageCount = pdfDocument.pageCount
-        
+
         var hasValidText = false
-        
+        var lastModelUnavailableException: com.readme.app.reading.content.pdf.ocr.PdfOcrModelUnavailableException? = null
+        var lastUnavailableException: com.readme.app.reading.content.pdf.ocr.PdfOcrUnavailableException? = null
+        var lastInitializationException: com.readme.app.reading.content.pdf.ocr.PdfOcrInitializationException? = null
+        var ocrAttemptedPages = 0
+
         for (page in 0 until pageCount) {
-            if (!coroutineContext.isActive) break
-            
-            val pageContent = pdfDocument.getPageContent(page)
+            coroutineContext.ensureActive()
+
+            val pageContent = try {
+                pdfDocument.getPageContent(page)
+            } catch (e: Throwable) {
+                null
+            }
             val textContents = pageContent?.textContents
-            
+
             var pageText = ""
             var fromOcr = false
-            
+
             if (textContents != null && textContents.isNotEmpty()) {
                 val textBuilder = java.lang.StringBuilder()
                 for (textContent in textContents) {
@@ -42,40 +51,99 @@ class PdfDocumentParser(
                 }
                 pageText = textBuilder.toString()
             }
-            
-            var cleanText = normalizeText(pageText)
-            
-            // If no native text, fallback to OCR
+
+            var cleanText = normalizeNativeText(pageText)
+
+            // If no native selectable text, fallback to OCR on this page
             if (cleanText.isBlank() && ocrEngine != null) {
+                ocrAttemptedPages++
                 try {
-                    val bitmapSource = pdfDocument.getPageBitmapSource(page)
-                    val bitmap = bitmapSource.getBitmap(Size(1200, 1600)) // Use reasonable default size
-                    
-                    val ocrResult = ocrEngine.recognize(bitmap)
-                    if (ocrResult.hasText) {
-                        cleanText = normalizeOcrText(ocrResult.text)
-                        fromOcr = true
+                    val pageInfo = try {
+                        pdfDocument.getPageInfo(page)
+                    } catch (e: Throwable) {
+                        null
                     }
-                    bitmap.recycle()
-                    bitmapSource.close()
-                } catch (e: Exception) {
-                    // Ignore OCR errors per page and continue
+                    val rasterSize = PdfPageRasterizer.calculateRasterSize(
+                        pageInfo?.width ?: 0,
+                        pageInfo?.height ?: 0
+                    )
+
+                    val bitmapSource = try {
+                        pdfDocument.getPageBitmapSource(page)
+                    } catch (e: Throwable) {
+                        null
+                    }
+
+                    val bitmap = if (bitmapSource != null) {
+                        try {
+                            bitmapSource.getBitmap(rasterSize)
+                        } catch (e: Throwable) {
+                            try { bitmapSource.close() } catch (_: Throwable) {}
+                            null
+                        }
+                    } else null
+
+                    if (bitmap != null && bitmapSource != null) {
+                        try {
+                            val ocrResult = ocrEngine.recognize(bitmap, page)
+                            if (ocrResult.hasText) {
+                                val normalizedOcr = PdfOcrTextNormalizer.normalize(ocrResult.text)
+                                if (normalizedOcr.isNotBlank()) {
+                                    cleanText = normalizedOcr
+                                    fromOcr = true
+                                }
+                            }
+                        } finally {
+                            try {
+                                bitmap.recycle()
+                            } catch (e: Throwable) {
+                                // Ignore recycle error
+                            }
+                            try {
+                                bitmapSource.close()
+                            } catch (e: Throwable) {
+                                // Ignore close error
+                            }
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: com.readme.app.reading.content.pdf.ocr.PdfOcrModelUnavailableException) {
+                    lastModelUnavailableException = e
+                } catch (e: com.readme.app.reading.content.pdf.ocr.PdfOcrUnavailableException) {
+                    lastUnavailableException = e
+                } catch (e: com.readme.app.reading.content.pdf.ocr.PdfOcrInitializationException) {
+                    lastInitializationException = e
+                } catch (e: Throwable) {
+                    // Page-level OCR failure: preserve physical page identity, do not crash whole document
                 }
             }
-            
-            // If we found any text, build segments
+
+            // If text is available (either native or OCR), construct segments
             if (cleanText.isNotBlank()) {
                 hasValidText = true
-                val segments = TxtDocumentParser.splitIntoSentences(cleanText)
-                if (segments.isNotEmpty()) {
-                    val sectionSegments = segments.mapIndexed { index, sentence ->
+                val paragraphs = cleanText.split(Regex("\\n\\s*\\n+"))
+                val allSentences = mutableListOf<String>()
+                for (para in paragraphs) {
+                    val sentences = TxtDocumentParser.splitIntoSentences(para)
+                    for (sentence in sentences) {
+                        val trimmed = sentence.trim()
+                        if (trimmed.isNotBlank()) {
+                            allSentences.add(trimmed)
+                        }
+                    }
+                }
+
+                if (allSentences.isNotEmpty()) {
+                    val sectionSegments = allSentences.mapIndexed { index, sentence ->
                         val segmentId = if (fromOcr) {
                             "pdf:$documentId:page:$page:ocr:$index"
                         } else {
-                            "page:${page}:segment:${index}"
+                            "page:$page:segment:$index"
                         }
                         ReadingSegment(id = segmentId, text = sentence)
                     }
+
                     sections.add(
                         ReadingSection(
                             id = "page:$page",
@@ -86,36 +154,42 @@ class PdfDocumentParser(
                 }
             }
         }
-        
+
         if (!hasValidText) {
+            if (lastModelUnavailableException != null) {
+                throw lastModelUnavailableException
+            }
+            if (lastUnavailableException != null) {
+                throw lastUnavailableException
+            }
+            if (lastInitializationException != null) {
+                throw lastInitializationException
+            }
             throw PdfNoSelectableTextException("No selectable text was found in this PDF.")
         }
-        
+
         return ReadingDocument(
             id = "pdf:$documentId",
-            title = title,
+            metadata = ReadingDocumentMetadata(
+                title = title.ifBlank { "Untitled Document" },
+                author = author,
+                sourceType = ReadingDocumentSourceType.PDF
+            ),
             sections = sections
         )
     }
 
-    private fun normalizeText(text: String): String {
+    private fun normalizeNativeText(text: String): String {
         return text
             .replace(Regex("(?<=\\w)-\\s*\\r?\\n\\s*(?=\\w)"), "") // Hyphenated word break
             .replace(Regex("\\r?\\n"), " ") // New lines to spaces
             .replace(Regex("\\s+"), " ") // Multiple spaces to single space
             .trim()
     }
-    
-    private fun normalizeOcrText(text: String): String {
-        // More conservative normalisation for OCR
-        return text
-            .replace(Regex("(?<=\\w)-\\s*\\r?\\n\\s*(?=\\w)"), "") // Hyphenated word break
-            .replace(Regex("([^\\r\\n])\\r?\\n([^\\r\\n])"), "$1 $2") // New lines within paragraphs to spaces
-            .replace(Regex("\\s{2,}"), " ") // Multiple spaces to single space
-            .trim()
-    }
 }
 
-class PdfNoSelectableTextException(message: String) : Exception(message)
+open class PdfNoSelectableTextException(message: String = "No selectable text was found in this PDF.") : Exception(message)
+class PdfOcrNoTextException(message: String = "No text could be recognized in this PDF.") : PdfNoSelectableTextException(message)
 class PdfExtractionException(message: String, cause: Throwable? = null) : Exception(message, cause)
 class PdfPasswordRequiredException(message: String) : Exception(message)
+
