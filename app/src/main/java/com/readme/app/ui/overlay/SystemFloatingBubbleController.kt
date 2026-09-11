@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import com.readme.app.accessibility.CrossAppAcquisitionMode
 import com.readme.app.reading.ActiveDocumentState
 import com.readme.app.reading.ActiveReadingSessionState
 import com.readme.app.ui.components.BubbleState
@@ -29,11 +30,13 @@ class SystemFloatingBubbleController(private val context: Context) {
     fun show(
         sessionState: ActiveReadingSessionState,
         activeDocumentState: ActiveDocumentState,
-        onToggleReading: () -> Unit
+        canAcquireText: Boolean = false,
+        onToggleReading: () -> Unit,
+        onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
     ) {
         if (!Settings.canDrawOverlays(context)) return
 
-        val bubbleState = getBubbleState(sessionState, activeDocumentState)
+        val bubbleState = getSystemBubbleState(sessionState, activeDocumentState, canAcquireText)
         if (bubbleState == BubbleState.Hidden) {
             hide()
             return
@@ -45,14 +48,16 @@ class SystemFloatingBubbleController(private val context: Context) {
                     SystemFloatingBubbleContent(
                         sessionState = sessionState,
                         activeDocumentState = activeDocumentState,
-                        onToggleReading = onToggleReading
+                        canAcquireText = canAcquireText,
+                        onToggleReading = onToggleReading,
+                        onAcquireMode = onAcquireMode,
+                        onDrag = { dx, dy -> handleDrag(this, dx, dy) }
                     )
                 }
-                setupDragging(this, onToggleReading)
                 start()
             }
         } else {
-            updateState(sessionState, activeDocumentState, onToggleReading)
+            updateState(sessionState, activeDocumentState, canAcquireText, onToggleReading, onAcquireMode)
             return
         }
 
@@ -68,19 +73,47 @@ class SystemFloatingBubbleController(private val context: Context) {
         }
     }
 
+    private fun handleDrag(view: View, dx: Float, dy: Float) {
+        val params = view.layoutParams as? WindowManager.LayoutParams ?: return
+        val displayMetrics = DisplayMetrics()
+        windowManager?.defaultDisplay?.getMetrics(displayMetrics)
+        
+        val newX = params.x + dx.toInt()
+        val newY = params.y + dy.toInt()
+        
+        val (clampedX, clampedY) = clampPosition(
+            newX,
+            newY,
+            view.width,
+            view.height,
+            displayMetrics.widthPixels,
+            displayMetrics.heightPixels
+        )
+        params.x = clampedX
+        params.y = clampedY
+        
+        try {
+            windowManager?.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            // Safely ignore update errors if window is transitioning
+        }
+    }
+
     fun updateState(
         sessionState: ActiveReadingSessionState,
         activeDocumentState: ActiveDocumentState,
-        onToggleReading: () -> Unit
+        canAcquireText: Boolean = false,
+        onToggleReading: () -> Unit,
+        onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
     ) {
-        val bubbleState = getBubbleState(sessionState, activeDocumentState)
+        val bubbleState = getSystemBubbleState(sessionState, activeDocumentState, canAcquireText)
         if (bubbleState == BubbleState.Hidden) {
             hide()
             return
         }
         
         if (!isAdded) {
-            show(sessionState, activeDocumentState, onToggleReading)
+            show(sessionState, activeDocumentState, canAcquireText, onToggleReading, onAcquireMode)
             return
         }
 
@@ -88,7 +121,10 @@ class SystemFloatingBubbleController(private val context: Context) {
             SystemFloatingBubbleContent(
                 sessionState = sessionState,
                 activeDocumentState = activeDocumentState,
-                onToggleReading = onToggleReading
+                canAcquireText = canAcquireText,
+                onToggleReading = onToggleReading,
+                onAcquireMode = onAcquireMode,
+                onDrag = { dx, dy -> handleDrag(bubbleView!!, dx, dy) }
             )
         }
     }
@@ -131,60 +167,6 @@ class SystemFloatingBubbleController(private val context: Context) {
             gravity = Gravity.TOP or Gravity.START
             x = 100
             y = 100
-        }
-    }
-
-    private fun setupDragging(view: View, onToggleReading: () -> Unit) {
-        var initialX = 0
-        var initialY = 0
-        var initialTouchX = 0f
-        var initialTouchY = 0f
-        val displayMetrics = DisplayMetrics()
-        
-        view.setOnTouchListener { _, event ->
-            val params = view.layoutParams as WindowManager.LayoutParams
-            windowManager?.defaultDisplay?.getMetrics(displayMetrics)
-            
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    initialX = params.x
-                    initialY = params.y
-                    initialTouchX = event.rawX
-                    initialTouchY = event.rawY
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val rawNewX = initialX + (event.rawX - initialTouchX).toInt()
-                    val rawNewY = initialY + (event.rawY - initialTouchY).toInt()
-                    
-                    val (clampedX, clampedY) = clampPosition(
-                        rawNewX,
-                        rawNewY,
-                        view.width,
-                        view.height,
-                        displayMetrics.widthPixels,
-                        displayMetrics.heightPixels
-                    )
-                    params.x = clampedX
-                    params.y = clampedY
-                    
-                    try {
-                        windowManager?.updateViewLayout(view, params)
-                    } catch (e: Exception) {
-                        // Safely ignore update errors if window is transitioning
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    val diffX = Math.abs(event.rawX - initialTouchX)
-                    val diffY = Math.abs(event.rawY - initialTouchY)
-                    if (diffX < 10 && diffY < 10) {
-                        onToggleReading()
-                    }
-                    true
-                }
-                else -> false
-            }
         }
     }
 

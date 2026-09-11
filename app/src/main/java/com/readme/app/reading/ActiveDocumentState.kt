@@ -18,7 +18,12 @@ data class ActiveDocumentState(
     val author: String? = null,
     val sourceType: ReadingDocumentSourceType = ReadingDocumentSourceType.OTHER,
     val displayName: String = "",
-    val loadState: DocumentLoadState = DocumentLoadState.NoDocument
+    val loadState: DocumentLoadState = DocumentLoadState.NoDocument,
+    val isEphemeral: Boolean = false,
+    val sourcePackageName: String? = null,
+    val sourceAppLabel: String? = null,
+    val hasSuspendedPrimary: Boolean = false,
+    val suspendedPrimaryTitle: String? = null
 ) {
     val hasActiveDocument: Boolean get() = documentId.isNotEmpty() && loadState is DocumentLoadState.Loaded
     val isLoaded: Boolean get() = loadState is DocumentLoadState.Loaded
@@ -32,7 +37,12 @@ data class ActiveDocumentState(
         fun fromDocument(
             document: ReadingDocument,
             displayName: String = document.title,
-            loadState: DocumentLoadState = DocumentLoadState.Loaded
+            loadState: DocumentLoadState = DocumentLoadState.Loaded,
+            isEphemeral: Boolean = false,
+            sourcePackageName: String? = null,
+            sourceAppLabel: String? = null,
+            hasSuspendedPrimary: Boolean = false,
+            suspendedPrimaryTitle: String? = null
         ): ActiveDocumentState {
             return ActiveDocumentState(
                 documentId = document.id,
@@ -40,7 +50,12 @@ data class ActiveDocumentState(
                 author = document.author,
                 sourceType = document.sourceType,
                 displayName = displayName,
-                loadState = loadState
+                loadState = loadState,
+                isEphemeral = isEphemeral,
+                sourcePackageName = sourcePackageName,
+                sourceAppLabel = sourceAppLabel,
+                hasSuspendedPrimary = hasSuspendedPrimary,
+                suspendedPrimaryTitle = suspendedPrimaryTitle
             )
         }
     }

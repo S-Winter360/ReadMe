@@ -11,11 +11,16 @@ import com.readme.app.reading.ReadingPosition
 import com.readme.app.reading.ReadingSegment
 import com.readme.app.reading.ReadingSessionCoordinator
 import com.readme.app.reading.ReadingSessionState
+import com.readme.app.reading.progress.NoOpReadingProgressRepository
 import com.readme.app.reading.progress.PersistentReadingProgressRepository
 import com.readme.app.reading.progress.ReadingProgress
 import com.readme.app.reading.progress.ReadingProgressRepository
 import com.readme.app.reading.progress.ReadingProgressValidator
 import com.readme.app.reading.progress.SavedProgressState
+import com.readme.app.reading.session.EphemeralReadingContext
+import com.readme.app.reading.session.PrimaryReadingContext
+import com.readme.app.reading.session.ReadingContextType
+import com.readme.app.reading.session.SuspendedPrimaryReadingContext
 import com.readme.app.settings.ReadMeSettings
 import com.readme.app.settings.ReadMeSettingsRepository
 import com.readme.app.speech.ReadMeSpeechEngine
@@ -91,6 +96,21 @@ class ReadMeReadingSessionRuntime(
     private var restartJob: Job? = null
     private var latestSettings: ReadMeSettings = ReadMeSettings()
 
+    private var suspendedPrimaryContext: SuspendedPrimaryReadingContext? = null
+    val currentSuspendedPrimaryContext: SuspendedPrimaryReadingContext?
+        get() = suspendedPrimaryContext
+
+    private var activeEphemeralContext: EphemeralReadingContext? = null
+    val currentEphemeralContext: EphemeralReadingContext?
+        get() = activeEphemeralContext
+
+    private var sessionGeneration: Long = 0L
+    val currentSessionGeneration: Long
+        get() = sessionGeneration
+
+    val isEphemeralActive: Boolean
+        get() = activeEphemeralContext != null || sessionCoordinator.activeDocumentState.value.isEphemeral
+
     init {
         // Collect speech state to synchronize session coordinator
         runtimeScope.launch {
@@ -165,9 +185,12 @@ class ReadMeReadingSessionRuntime(
         if (sessionId != activeSessionId || activeSessionId == 0L) return
         if (readingEngine.readingState.value != ReadingSessionState.Reading) return
 
+        val isEphemeral = isEphemeralActive
         val nextSegment = sessionCoordinator.advanceReading()
         if (nextSegment != null) {
-            saveCurrentProgress(isCompleted = false)
+            if (!isEphemeral) {
+                saveCurrentProgress(isCompleted = false)
+            }
             val settings = latestSettings
             speechEngine.speakSegment(
                 segmentId = nextSegment.id,
@@ -180,7 +203,9 @@ class ReadMeReadingSessionRuntime(
             )
         } else {
             sessionCoordinator.onReadingCompleted()
-            saveCurrentProgress(isCompleted = true)
+            if (!isEphemeral) {
+                saveCurrentProgress(isCompleted = true)
+            }
             notifyCompleted()
         }
     }
@@ -231,7 +256,9 @@ class ReadMeReadingSessionRuntime(
 
         val segmentToSpeak = sessionCoordinator.startReading()
         if (segmentToSpeak != null) {
-            saveCurrentProgress(isCompleted = false)
+            if (!isEphemeralActive) {
+                saveCurrentProgress(isCompleted = false)
+            }
             val settings = latestSettings
             speechEngine.speakSegment(
                 segmentId = segmentToSpeak.id,
@@ -256,7 +283,9 @@ class ReadMeReadingSessionRuntime(
         activeSessionId = 0L
         sessionCoordinator.stopReading()
         speechEngine.stop()
-        saveCurrentProgress(isCompleted = false)
+        if (!isEphemeralActive) {
+            saveCurrentProgress(isCompleted = false)
+        }
         notifyStopped()
     }
 
@@ -266,7 +295,8 @@ class ReadMeReadingSessionRuntime(
     fun restartReadingFromBeginning() {
         stopReading()
         val doc = readingEngine.currentDocument
-        if (doc.id.isNotBlank()) {
+        val isEphemeral = isEphemeralActive
+        if (!isEphemeral && doc.id.isNotBlank()) {
             runtimeScope.launch(ioDispatcher) {
                 progressRepository.clearProgress(doc.id)
             }
@@ -277,11 +307,138 @@ class ReadMeReadingSessionRuntime(
     }
 
     /**
+     * Loads an ephemeral in-memory document (such as cross-app text) into the session coordinator
+     * and reading engine, safely suspending any active primary session.
+     */
+    fun loadEphemeralDocument(
+        document: ReadingDocument,
+        displayName: String = document.title,
+        sourcePackageName: String? = null,
+        sourceAppLabel: String? = null,
+        snapshotIdentity: Long = 0L
+    ): Boolean {
+        val activeDoc = sessionCoordinator.activeDocumentState.value
+        val isCurrentlyPrimary = activeDoc.hasActiveDocument && !activeDoc.isEphemeral && activeEphemeralContext == null
+
+        if (isCurrentlyPrimary) {
+            // Persist valid primary progress before suspension
+            saveCurrentProgress(isCompleted = false)
+
+            val currentDoc = readingEngine.currentDocument
+            val currentPos = readingEngine.currentPosition.value
+            val currentSessionState = readingEngine.readingState.value
+            val currentDisplayName = activeDoc.displayName
+
+            suspendedPrimaryContext = SuspendedPrimaryReadingContext(
+                document = currentDoc,
+                displayName = currentDisplayName,
+                savedPosition = currentPos,
+                priorSessionState = currentSessionState,
+                runtimeGeneration = sessionGeneration
+            )
+        }
+
+        // Halt any current speech
+        stopReading()
+        sessionGeneration++
+
+        val pkgName = sourcePackageName ?: ""
+
+        activeEphemeralContext = EphemeralReadingContext(
+            document = document,
+            sourcePackageName = pkgName,
+            sourceAppLabel = sourceAppLabel,
+            snapshotIdentity = snapshotIdentity,
+            generation = sessionGeneration
+        )
+
+        val token = sessionCoordinator.startLoading(displayName)
+        _savedProgressState.value = SavedProgressState.None
+
+        val loaded = sessionCoordinator.onDocumentLoaded(
+            token = token,
+            document = document,
+            displayName = displayName,
+            isEphemeral = true,
+            sourcePackageName = pkgName,
+            sourceAppLabel = sourceAppLabel,
+            hasSuspendedPrimary = (suspendedPrimaryContext != null),
+            suspendedPrimaryTitle = suspendedPrimaryContext?.document?.title
+        )
+
+        if (!loaded) {
+            activeEphemeralContext = null
+            if (suspendedPrimaryContext != null) {
+                returnToPrimaryDocument()
+            }
+        }
+
+        return loaded
+    }
+
+    /**
+     * Restores the suspended primary document reading session without auto-starting speech.
+     * Clears active ephemeral state and returns true if a suspended session was restored.
+     */
+    fun returnToPrimaryDocument(): Boolean {
+        sessionGeneration++
+        stopReading()
+        activeEphemeralContext = null
+
+        val suspended = suspendedPrimaryContext
+        suspendedPrimaryContext = null
+
+        if (suspended != null) {
+            val token = sessionCoordinator.startLoading(suspended.displayName)
+            val loaded = sessionCoordinator.onDocumentLoaded(
+                token = token,
+                document = suspended.document,
+                displayName = suspended.displayName,
+                isEphemeral = false
+            )
+            if (loaded) {
+                if (suspended.savedPosition != null && suspended.savedPosition.documentId == suspended.document.id) {
+                    sessionCoordinator.setPosition(suspended.savedPosition)
+                }
+                runtimeScope.launch(ioDispatcher) {
+                    restoreProgressIfAvailable(suspended.document.id)
+                }
+                return true
+            }
+        }
+
+        sessionCoordinator.clearActiveDocument()
+        _savedProgressState.value = SavedProgressState.None
+        return false
+    }
+
+    /**
+     * Explicitly discards ephemeral context, restoring primary session if available.
+     */
+    fun discardEphemeralContext(): Boolean {
+        return returnToPrimaryDocument()
+    }
+
+    /**
+     * Informs the runtime that a normal primary document is being opened.
+     * Discards any active ephemeral session and clears any suspended primary context.
+     */
+    fun onOpeningNormalDocument() {
+        if (activeEphemeralContext != null || sessionCoordinator.activeDocumentState.value.isEphemeral) {
+            stopReading()
+            activeEphemeralContext = null
+            sessionCoordinator.clearActiveDocument()
+        }
+        suspendedPrimaryContext = null
+        sessionGeneration++
+    }
+
+    /**
      * Restores saved progress for [documentId] if valid for the loaded document.
      */
     suspend fun restoreProgressIfAvailable(documentId: String) {
         val doc = readingEngine.currentDocument
-        if (doc.id != documentId || doc.id.isBlank()) {
+        if (doc.id != documentId || doc.id.isBlank() || doc.id.startsWith("crossapp_") || isEphemeralActive) {
             _savedProgressState.value = SavedProgressState.None
             return
         }
@@ -306,7 +463,7 @@ class ReadMeReadingSessionRuntime(
     fun saveCurrentProgress(isCompleted: Boolean = false) {
         val position = readingEngine.currentPosition.value ?: return
         val doc = readingEngine.currentDocument
-        if (doc.id.isBlank() || position.documentId != doc.id) return
+        if (doc.id.isBlank() || position.documentId != doc.id || doc.id.startsWith("crossapp_") || isEphemeralActive) return
 
         val progress = ReadingProgress.fromPosition(
             position = position,

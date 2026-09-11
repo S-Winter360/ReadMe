@@ -129,3 +129,12 @@ class InMemoryReadingProgressRepository : ReadingProgressRepository {
         storage.clear()
     }
 }
+
+/**
+ * No-op repository implementation to ensure ephemeral/external sessions strictly bypass persistence.
+ */
+class NoOpReadingProgressRepository : ReadingProgressRepository {
+    override suspend fun saveProgress(progress: ReadingProgress) {}
+    override suspend fun loadProgress(documentId: String): ReadingProgress? = null
+    override suspend fun clearProgress(documentId: String) {}
+}

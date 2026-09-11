@@ -17,7 +17,8 @@ data class ActiveReadingSessionState(
     val sessionState: ReadingSessionState = ReadingSessionState.Idle,
     val currentPosition: ReadingPosition? = null,
     val speechState: TtsState = TtsState.Uninitialized,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val isEphemeral: Boolean = false
 ) {
     val isReading: Boolean get() = sessionState == ReadingSessionState.Reading || speechState == TtsState.Speaking
     val isStopped: Boolean get() = sessionState == ReadingSessionState.Stopped

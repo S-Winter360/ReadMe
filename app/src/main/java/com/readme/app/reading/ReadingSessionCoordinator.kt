@@ -72,14 +72,28 @@ class ReadingSessionCoordinator(
      * Called when a document has successfully parsed and loaded.
      * Validates [token] to reject stale async loads.
      */
-    fun onDocumentLoaded(token: Long, document: ReadingDocument, displayName: String): Boolean {
+    fun onDocumentLoaded(
+        token: Long,
+        document: ReadingDocument,
+        displayName: String,
+        isEphemeral: Boolean = false,
+        sourcePackageName: String? = null,
+        sourceAppLabel: String? = null,
+        hasSuspendedPrimary: Boolean = false,
+        suspendedPrimaryTitle: String? = null
+    ): Boolean {
         if (!isCurrentLoadToken(token)) return false
 
         readingEngine.loadDocument(document)
         _activeDocumentState.value = ActiveDocumentState.fromDocument(
             document = document,
             displayName = displayName,
-            loadState = DocumentLoadState.Loaded
+            loadState = DocumentLoadState.Loaded,
+            isEphemeral = isEphemeral,
+            sourcePackageName = sourcePackageName,
+            sourceAppLabel = sourceAppLabel,
+            hasSuspendedPrimary = hasSuspendedPrimary,
+            suspendedPrimaryTitle = suspendedPrimaryTitle
         )
         syncSessionState(speechState = _readingSessionState.value.speechState, errorMessage = null)
         return true
@@ -209,7 +223,8 @@ class ReadingSessionCoordinator(
             sessionState = readingEngine.readingState.value,
             currentPosition = safePosition,
             speechState = speechState,
-            errorMessage = errorMessage
+            errorMessage = errorMessage,
+            isEphemeral = _activeDocumentState.value.isEphemeral
         )
     }
 

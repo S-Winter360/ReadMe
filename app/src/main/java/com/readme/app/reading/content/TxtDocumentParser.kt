@@ -94,7 +94,7 @@ object TxtDocumentParser {
     /**
      * Splits a single cleaned paragraph into individual sentence units suitable for speech.
      */
-    internal fun splitIntoSentences(paragraph: String): List<String> {
+    fun splitIntoSentences(paragraph: String): List<String> {
         val clean = paragraph.replace(Regex("[ \t\n\r]+"), " ").trim()
         if (clean.isEmpty()) return emptyList()
 

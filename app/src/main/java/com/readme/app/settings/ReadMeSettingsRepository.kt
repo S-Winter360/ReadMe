@@ -28,6 +28,7 @@ class ReadMeSettingsRepository(private val context: Context) {
         val SPEECH_SPEED = floatPreferencesKey("speech_speed")
         val SPEECH_PITCH = floatPreferencesKey("speech_pitch")
         val SYSTEM_BUBBLE_ENABLED = booleanPreferencesKey("system_bubble_enabled")
+        val SCREEN_OCR_CONSENT_GRANTED = booleanPreferencesKey("screen_ocr_consent_granted")
     }
 
     val settingsFlow: Flow<ReadMeSettings> = context.dataStore.data
@@ -44,6 +45,7 @@ class ReadMeSettingsRepository(private val context: Context) {
             val speed = preferences[PreferencesKeys.SPEECH_SPEED] ?: 1.0f
             val pitch = preferences[PreferencesKeys.SPEECH_PITCH] ?: 0.50f
             val isBubbleEnabled = preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED] ?: false
+            val isOcrConsentGranted = preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] ?: false
 
             // Validate/clamp numeric values
             val clampedVolume = volume.coerceIn(0.0f, 1.0f)
@@ -55,7 +57,8 @@ class ReadMeSettingsRepository(private val context: Context) {
                 speechVolume = clampedVolume,
                 speechSpeed = clampedSpeed,
                 speechPitch = clampedPitch,
-                isSystemBubbleEnabled = isBubbleEnabled
+                isSystemBubbleEnabled = isBubbleEnabled,
+                isScreenOcrConsentGranted = isOcrConsentGranted
             )
         }
 
@@ -89,6 +92,12 @@ class ReadMeSettingsRepository(private val context: Context) {
     suspend fun updateSystemBubbleEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateScreenOcrConsentGranted(granted: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] = granted
         }
     }
 }

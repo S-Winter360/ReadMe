@@ -14,6 +14,8 @@ import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.readme.app.MainActivity
 import com.readme.app.R
+import com.readme.app.accessibility.CrossAppAcquisitionMode
+import com.readme.app.accessibility.ReadMeAccessibilityService
 import com.readme.app.reading.ActiveDocumentState
 import com.readme.app.reading.ActiveReadingSessionState
 import com.readme.app.settings.ReadMeSettings
@@ -100,7 +102,11 @@ class ReadMeReadingService : Service() {
         } else {
             // Stopped or paused
             val canDraw = Settings.canDrawOverlays(this)
-            val shouldShowBubble = state.settings.isSystemBubbleEnabled && canDraw && !state.isForeground && state.docState.hasActiveDocument
+            val hasAccessibility = ReadMeAccessibilityService.isConnected
+            val shouldShowBubble = state.settings.isSystemBubbleEnabled &&
+                    canDraw &&
+                    !state.isForeground &&
+                    (state.docState.hasActiveDocument || hasAccessibility)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
             } else {
@@ -116,24 +122,79 @@ class ReadMeReadingService : Service() {
 
         // System Floating Bubble management
         val canDraw = Settings.canDrawOverlays(this)
+        val hasAccessibility = ReadMeAccessibilityService.isConnected
+        val canAcquire = hasAccessibility && !state.docState.hasActiveDocument
         val shouldShowBubble = state.settings.isSystemBubbleEnabled &&
                 canDraw &&
                 !state.isForeground &&
-                state.docState.hasActiveDocument
+                (state.docState.hasActiveDocument || hasAccessibility)
 
         if (shouldShowBubble) {
             bubbleController?.show(
                 sessionState = state.sessionState,
-                activeDocumentState = state.docState
-            ) {
-                if (sessionRuntime.readingSessionState.value.isReading) {
-                    sessionRuntime.stopReading()
-                } else {
-                    sessionRuntime.startReading()
+                activeDocumentState = state.docState,
+                canAcquireText = canAcquire,
+                onToggleReading = {
+                    if (sessionRuntime.readingSessionState.value.isReading) {
+                        sessionRuntime.stopReading()
+                    } else if (state.docState.isEphemeral && state.sessionState.isCompleted && state.docState.hasSuspendedPrimary) {
+                        sessionRuntime.returnToPrimaryDocument()
+                    } else if (state.docState.hasActiveDocument) {
+                        sessionRuntime.startReading()
+                    }
+                },
+                onAcquireMode = { mode ->
+                    serviceScope.launch {
+                        val service = ReadMeAccessibilityService.instance
+                        val targetPkg = service?.currentActivePackage
+                        val targetWindow = service?.identifyTargetWindow()
+                        val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
+                        val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) com.readme.app.accessibility.OnDeviceCrossAppOcrEngine() else null
+                        
+                        val result = try {
+                            com.readme.app.accessibility.CrossAppReadingCoordinator.acquire(
+                                mode = mode,
+                                textAcquirer = service,
+                                screenshotCapturer = service,
+                                ocrEngine = ocrEngine,
+                                request = com.readme.app.accessibility.CrossAppAcquisitionRequest(targetPackageName = targetPkg),
+                                target = targetWindow,
+                                appLabel = appLabel
+                            )
+                        } finally {
+                            ocrEngine?.close()
+                        }
+                
+                        if (result is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.Success) {
+                            sessionRuntime.loadEphemeralDocument(
+                                document = result.document,
+                                displayName = result.document.metadata.title,
+                                sourcePackageName = result.sourcePackageName,
+                                sourceAppLabel = result.sourceAppLabel,
+                                snapshotIdentity = System.currentTimeMillis()
+                            )
+                            sessionRuntime.startReading()
+                        }
+                    }
                 }
-            }
+            )
         } else {
             bubbleController?.hide()
+        }
+    }
+
+    private fun getApplicationLabel(packageName: String): String {
+        return try {
+            val pm = packageManager
+            val info = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                pm.getApplicationInfo(packageName, android.content.pm.PackageManager.ApplicationInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getApplicationInfo(packageName, 0)
+            }
+            pm.getApplicationLabel(info).toString()
+        } catch (_: Exception) {
+            packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
         }
     }
 
@@ -141,7 +202,12 @@ class ReadMeReadingService : Service() {
         sessionState: ActiveReadingSessionState,
         activeDocState: ActiveDocumentState
     ): Notification {
-        val title = activeDocState.displayName.ifBlank { activeDocState.title }.ifBlank { "ReadMe" }
+        val title = if (activeDocState.isEphemeral) {
+            val appLabel = activeDocState.sourceAppLabel ?: activeDocState.sourcePackageName?.substringAfterLast('.')?.replaceFirstChar { it.uppercase() }
+            if (!appLabel.isNullOrBlank()) "Reading from $appLabel" else activeDocState.displayName
+        } else {
+            activeDocState.displayName.ifBlank { activeDocState.title }.ifBlank { "ReadMe" }
+        }
         val content = if (sessionState.isReading) {
             val segment = sessionRuntime.readingEngine.currentSegment.value
             segment?.text?.take(80) ?: "Reading in progress..."

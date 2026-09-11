@@ -6,6 +6,12 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.readme.app.accessibility.CrossAppAcquisitionMode
+import com.readme.app.accessibility.CrossAppReadingCoordinator
+import com.readme.app.accessibility.CrossAppAcquisitionRequest
+import com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult
+import com.readme.app.accessibility.OnDeviceCrossAppOcrEngine
+import com.readme.app.accessibility.ReadMeAccessibilityService
 import com.readme.app.reading.ActiveDocumentState
 import com.readme.app.reading.ActiveReadingSessionState
 import com.readme.app.reading.DocumentLoadState
@@ -49,6 +55,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -102,6 +109,19 @@ class ReadMeViewModel @JvmOverloads constructor(
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = ReadMeSettings()
     )
+
+    val isScreenOcrSupported: Boolean
+        get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+
+    val isScreenOcrConsentGranted: StateFlow<Boolean> = settings
+        .map { it.isScreenOcrConsentGranted }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setScreenOcrConsentGranted(granted: Boolean) {
+        viewModelScope.launch {
+            repository.updateScreenOcrConsentGranted(granted)
+        }
+    }
 
     private var restartJob: Job? = null
     private var documentLoadJob: Job? = null
@@ -240,6 +260,7 @@ class ReadMeViewModel @JvmOverloads constructor(
     }
 
     fun selectDocument(uri: Uri) {
+        sessionRuntime.onOpeningNormalDocument()
         stopReading()
         navigationCoordinator.clearDocument()
         documentLoadJob?.cancel()
@@ -516,6 +537,83 @@ class ReadMeViewModel @JvmOverloads constructor(
     private suspend fun restoreProgressIfAvailable(documentId: String) {
         sessionRuntime.restoreProgressIfAvailable(documentId)
         updatePdfSyncState()
+    }
+
+    /**
+     * Explicitly acquires cross-app content using the unified coordinator based on the requested mode.
+     */
+    suspend fun acquireAndReadCrossAppContent(mode: CrossAppAcquisitionMode): UnifiedCrossAppAcquisitionResult {
+        val service = ReadMeAccessibilityService.instance
+        val targetPkg = service?.currentActivePackage
+        val targetWindow = service?.identifyTargetWindow()
+        val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
+        val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) OnDeviceCrossAppOcrEngine() else null
+        
+        val result = try {
+            CrossAppReadingCoordinator.acquire(
+                mode = mode,
+                textAcquirer = service,
+                screenshotCapturer = service,
+                ocrEngine = ocrEngine,
+                request = CrossAppAcquisitionRequest(targetPackageName = targetPkg),
+                target = targetWindow,
+                appLabel = appLabel
+            )
+        } finally {
+            ocrEngine?.close()
+        }
+
+        if (result is UnifiedCrossAppAcquisitionResult.Success) {
+            _selectedDocumentName.value = result.document.metadata.title
+            _loadError.value = null
+            sessionRuntime.loadEphemeralDocument(
+                document = result.document,
+                displayName = result.document.metadata.title,
+                sourcePackageName = result.sourcePackageName,
+                sourceAppLabel = result.sourceAppLabel,
+                snapshotIdentity = System.currentTimeMillis()
+            )
+            startReading()
+        }
+        return result
+    }
+
+    /**
+     * Explicitly returns from an ephemeral cross-app reading session to the suspended primary document.
+     * Reconnects PDF visual and navigation state if the restored document is a PDF.
+     */
+    fun returnToPrimaryDocument(): Boolean {
+        val restored = sessionRuntime.returnToPrimaryDocument()
+        if (restored) {
+            val restoredDoc = sessionRuntime.activeDocumentState.value
+            _selectedDocumentName.value = restoredDoc.displayName.ifBlank { restoredDoc.title }.ifBlank { null }
+            _loadError.value = null
+            if (restoredDoc.sourceType == ReadingDocumentSourceType.PDF) {
+                val doc = sessionRuntime.readingEngine.currentDocument
+                val mapper = PdfReadingPositionMapper.fromDocument(doc)
+                pdfMapper = mapper
+                navigationCoordinator.setPdfDocument(mapper, isActive = true)
+                updatePdfSyncState()
+            }
+        } else {
+            _selectedDocumentName.value = null
+        }
+        return restored
+    }
+
+    private fun getApplicationLabel(packageName: String): String {
+        return try {
+            val pm = getApplication<Application>().packageManager
+            val appInfo = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                pm.getApplicationInfo(packageName, android.content.pm.PackageManager.ApplicationInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getApplicationInfo(packageName, 0)
+            }
+            pm.getApplicationLabel(appInfo).toString()
+        } catch (_: Exception) {
+            packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        }
     }
 
     override fun onCleared() {
