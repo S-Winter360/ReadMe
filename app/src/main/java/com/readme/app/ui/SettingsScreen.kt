@@ -47,16 +47,10 @@ fun SettingsScreen(
             TopAppBar(
                 title = { Text("Settings", style = MaterialTheme.typography.titleLarge) },
                 navigationIcon = {
-                    IconButton(
+                    com.readme.app.ui.components.ReadMeBackButton(
                         onClick = onNavigateBack,
                         modifier = Modifier.testTag("settings_back_button")
-                    ) {
-                        Text(
-                            text = "←",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                    }
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,

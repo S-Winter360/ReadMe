@@ -24,9 +24,7 @@ fun HowToUseScreen(onNavigateBack: () -> Unit) {
             TopAppBar(
                 title = { Text("How to Use", style = MaterialTheme.typography.headlineMedium) },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Text("←", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-                    }
+                    com.readme.app.ui.components.ReadMeBackButton(onClick = onNavigateBack)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,

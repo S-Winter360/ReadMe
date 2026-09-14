@@ -24,9 +24,7 @@ fun AboutReadMeScreen(onNavigateBack: () -> Unit) {
             TopAppBar(
                 title = { Text("About ReadMe", style = MaterialTheme.typography.headlineMedium) },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Text("←", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
-                    }
+                    com.readme.app.ui.components.ReadMeBackButton(onClick = onNavigateBack)
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
