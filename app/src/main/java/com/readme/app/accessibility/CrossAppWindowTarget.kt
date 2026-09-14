@@ -1,5 +1,7 @@
 package com.readme.app.accessibility
 
+import android.graphics.Rect
+
 /**
  * Immutable target descriptor for an active window requested for explicit screen capture.
  *
@@ -11,5 +13,6 @@ data class CrossAppWindowTarget(
     val displayId: Int = 0,
     val requestId: Long = System.currentTimeMillis(),
     val generation: Long = 0L,
-    val isSensitiveOrPassword: Boolean = false
+    val isSensitiveOrPassword: Boolean = false,
+    val windowBounds: Rect = Rect()
 )

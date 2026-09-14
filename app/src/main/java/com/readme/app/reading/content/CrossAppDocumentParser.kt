@@ -82,17 +82,14 @@ object CrossAppDocumentParser {
     }
 
     /**
-     * Converts recognized OCR text from an external window snapshot into a structured [ReadingDocument].
-     *
-     * Reuses [TxtDocumentParser.splitIntoSentences] for speech-friendly sentence segmentation.
-     * Uses [ReadingDocumentSourceType.OTHER] and an ephemeral "crossapp_ocr_" document ID prefix.
+     * Converts recognized OCR result (including geometry) from an external window snapshot into a structured [ReadingDocument].
      */
-    fun parseOcrText(
+    fun parseOcrResult(
         target: CrossAppWindowTarget,
-        ocrText: String,
+        ocrResult: com.readme.app.accessibility.CrossAppOcrResult,
         appLabel: String? = null
     ): ReadingDocument {
-        val cleanText = ocrText.trim()
+        val cleanText = ocrResult.text.trim()
         val docId = "crossapp_ocr_${target.packageName}_win${target.windowId}_gen${target.generation}_${target.requestId}"
         val docTitle = when {
             !appLabel.isNullOrBlank() -> "Text from $appLabel"
@@ -113,20 +110,37 @@ object CrossAppDocumentParser {
             )
         }
 
-        val sentences = TxtDocumentParser.splitIntoSentences(cleanText)
         val segments = mutableListOf<ReadingSegment>()
         var segmentCounter = 0
 
-        for (sentence in sentences) {
-            val trimmedSentence = sentence.trim()
-            if (trimmedSentence.isNotBlank()) {
-                segments.add(
-                    ReadingSegment(
-                        id = "${docId}_seg_$segmentCounter",
-                        text = trimmedSentence
+        if (ocrResult.sentences.isNotEmpty()) {
+            for (sentence in ocrResult.sentences) {
+                val trimmed = sentence.text.trim()
+                if (trimmed.isNotBlank()) {
+                    val bounds = sentence.lineBounds.ifEmpty { listOf(sentence.bounds) }
+                    segments.add(
+                        ReadingSegment(
+                            id = "${docId}_seg_$segmentCounter",
+                            text = trimmed,
+                            boundingBoxes = bounds
+                        )
                     )
-                )
-                segmentCounter++
+                    segmentCounter++
+                }
+            }
+        } else {
+            val sentences = TxtDocumentParser.splitIntoSentences(cleanText)
+            for (sentence in sentences) {
+                val trimmedSentence = sentence.trim()
+                if (trimmedSentence.isNotBlank()) {
+                    segments.add(
+                        ReadingSegment(
+                            id = "${docId}_seg_$segmentCounter",
+                            text = trimmedSentence
+                        )
+                    )
+                    segmentCounter++
+                }
             }
         }
 
@@ -140,6 +154,24 @@ object CrossAppDocumentParser {
             id = docId,
             metadata = metadata,
             sections = if (segments.isEmpty()) emptyList() else listOf(section)
+        )
+    }
+
+    /**
+     * Converts recognized OCR text from an external window snapshot into a structured [ReadingDocument].
+     *
+     * Reuses [TxtDocumentParser.splitIntoSentences] for speech-friendly sentence segmentation.
+     * Uses [ReadingDocumentSourceType.OTHER] and an ephemeral "crossapp_ocr_" document ID prefix.
+     */
+    fun parseOcrText(
+        target: CrossAppWindowTarget,
+        ocrText: String,
+        appLabel: String? = null
+    ): ReadingDocument {
+        return parseOcrResult(
+            target = target,
+            ocrResult = com.readme.app.accessibility.CrossAppOcrResult(text = ocrText),
+            appLabel = appLabel
         )
     }
 

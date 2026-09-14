@@ -33,6 +33,8 @@ class ReadMeReadingService : Service() {
     private val sessionRuntime by lazy { ReadMeReadingSessionRuntime.getInstance(applicationContext) }
     private val settingsRepo by lazy { sessionRuntime.settingsRepository ?: ReadMeSettingsRepository(applicationContext) }
     private var bubbleController: SystemFloatingBubbleController? = null
+    private var selectionController: com.readme.app.ui.overlay.ScreenRegionSelectionController? = null
+    private var highlightOverlayController: com.readme.app.ui.overlay.ScreenHighlightOverlayController? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val notificationManager by lazy {
@@ -43,6 +45,8 @@ class ReadMeReadingService : Service() {
         super.onCreate()
         createNotificationChannel()
         bubbleController = SystemFloatingBubbleController(applicationContext)
+        selectionController = com.readme.app.ui.overlay.ScreenRegionSelectionController(applicationContext)
+        highlightOverlayController = com.readme.app.ui.overlay.ScreenHighlightOverlayController(applicationContext)
 
         serviceScope.launch {
             combine(
@@ -54,6 +58,22 @@ class ReadMeReadingService : Service() {
                 BubbleAndNotificationState(sessionState, docState, isForeground, settings)
             }.collect { state ->
                 updateNotificationAndBubble(state)
+            }
+        }
+
+        serviceScope.launch {
+            combine(
+                sessionRuntime.readingSessionState,
+                sessionRuntime.readingEngine.currentSegment,
+                sessionRuntime.activeDocumentState
+            ) { sessionState, currentSeg, docState ->
+                Triple(sessionState, currentSeg, docState)
+            }.collect { (sessionState, currentSeg, docState) ->
+                if (sessionState.isReading && currentSeg != null && currentSeg.boundingBoxes.isNotEmpty() && docState.isEphemeral) {
+                    highlightOverlayController?.showHighlight(currentSeg.boundingBoxes)
+                } else {
+                    highlightOverlayController?.clearHighlight()
+                }
             }
         }
     }
@@ -144,42 +164,79 @@ class ReadMeReadingService : Service() {
                     }
                 },
                 onAcquireMode = { mode ->
-                    serviceScope.launch {
+                    if (mode == CrossAppAcquisitionMode.SCREEN_OCR) {
                         val service = ReadMeAccessibilityService.instance
-                        val targetPkg = service?.currentActivePackage
                         val targetWindow = service?.identifyTargetWindow()
-                        val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
-                        val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) com.readme.app.accessibility.OnDeviceCrossAppOcrEngine() else null
-                        
-                        val result = try {
-                            com.readme.app.accessibility.CrossAppReadingCoordinator.acquire(
-                                mode = mode,
-                                textAcquirer = service,
-                                screenshotCapturer = service,
-                                ocrEngine = ocrEngine,
-                                request = com.readme.app.accessibility.CrossAppAcquisitionRequest(targetPackageName = targetPkg),
-                                target = targetWindow,
-                                appLabel = appLabel
-                            )
-                        } finally {
-                            ocrEngine?.close()
-                        }
-                
-                        if (result is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.Success) {
-                            sessionRuntime.loadEphemeralDocument(
-                                document = result.document,
-                                displayName = result.document.metadata.title,
-                                sourcePackageName = result.sourcePackageName,
-                                sourceAppLabel = result.sourceAppLabel,
-                                snapshotIdentity = System.currentTimeMillis()
-                            )
-                            sessionRuntime.startReading()
-                        }
+                        selectionController?.show(
+                            windowBounds = targetWindow?.windowBounds,
+                            onRegionSelected = { selectedRegion ->
+                                executeAcquisitionFlow(mode, selectedRegion)
+                            },
+                            onCancelled = {
+                                // User cancelled selection - no-op
+                            }
+                        )
+                    } else {
+                        executeAcquisitionFlow(mode, null)
                     }
                 }
             )
         } else {
             bubbleController?.hide()
+        }
+    }
+
+    private fun executeAcquisitionFlow(
+        mode: CrossAppAcquisitionMode,
+        selectedRegion: android.graphics.Rect?
+    ) {
+        serviceScope.launch {
+            val service = ReadMeAccessibilityService.instance
+            val targetPkg = service?.currentActivePackage
+            val targetWindow = service?.identifyTargetWindow()
+            val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
+            val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) com.readme.app.accessibility.OnDeviceCrossAppOcrEngine() else null
+            
+            val result = try {
+                com.readme.app.accessibility.CrossAppReadingCoordinator.acquire(
+                    mode = mode,
+                    textAcquirer = service,
+                    screenshotCapturer = service,
+                    ocrEngine = ocrEngine,
+                    request = com.readme.app.accessibility.CrossAppAcquisitionRequest(targetPackageName = targetPkg),
+                    target = targetWindow,
+                    appLabel = appLabel,
+                    selectedRegion = selectedRegion
+                )
+            } finally {
+                ocrEngine?.close()
+            }
+
+            if (result is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.Success) {
+                sessionRuntime.loadEphemeralDocument(
+                    document = result.document,
+                    displayName = result.document.metadata.title,
+                    sourcePackageName = result.sourcePackageName,
+                    sourceAppLabel = result.sourceAppLabel,
+                    snapshotIdentity = System.currentTimeMillis()
+                )
+                sessionRuntime.startReading()
+            } else {
+                val msg = when (result) {
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.NoTextAvailable -> "No readable text found"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ReadMeSelfIgnored -> "Switch to another app to read"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ServiceUnavailable -> "Service unavailable"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.AppSwitched -> "Cancelled (app switched)"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.RateLimited -> "Please wait a moment before trying again"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SecureWindow -> "No readable image is available from this screen"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SensitiveContentBlocked -> "Screen contains sensitive fields"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 14+"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.InvalidTarget -> "No active window found"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.UnknownError -> "Error: ${result.details}"
+                    else -> "Unable to read text"
+                }
+                android.widget.Toast.makeText(this@ReadMeReadingService, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -268,7 +325,11 @@ class ReadMeReadingService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         bubbleController?.destroy()
+        selectionController?.dismiss()
+        highlightOverlayController?.destroy()
         bubbleController = null
+        selectionController = null
+        highlightOverlayController = null
         serviceScope.cancel()
     }
 
@@ -311,7 +372,20 @@ class ReadMeReadingService : Service() {
             val intent = Intent(context, ReadMeReadingService::class.java).apply {
                 action = ACTION_SYNC_SERVICE
             }
-            context.startService(intent)
+            try {
+                context.startService(intent)
+            } catch (e: IllegalStateException) {
+                // Background service restriction
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        context.startForegroundService(intent)
+                    } catch (e2: Exception) {
+                        // Ignore
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
         }
     }
 }

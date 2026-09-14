@@ -117,6 +117,32 @@ class SystemFloatingBubbleController(private val context: Context) {
             return
         }
 
+        // Ensure bubble is clamped within screen bounds (e.g. after rotation)
+        bubbleView?.let { view ->
+            val params = view.layoutParams as? WindowManager.LayoutParams
+            if (params != null) {
+                val displayMetrics = DisplayMetrics()
+                windowManager?.defaultDisplay?.getMetrics(displayMetrics)
+                val (clampedX, clampedY) = clampPosition(
+                    params.x,
+                    params.y,
+                    view.width,
+                    view.height,
+                    displayMetrics.widthPixels,
+                    displayMetrics.heightPixels
+                )
+                if (params.x != clampedX || params.y != clampedY) {
+                    params.x = clampedX
+                    params.y = clampedY
+                    try {
+                        windowManager?.updateViewLayout(view, params)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
+                }
+            }
+        }
+
         bubbleView?.composeView?.setContent {
             SystemFloatingBubbleContent(
                 sessionState = sessionState,

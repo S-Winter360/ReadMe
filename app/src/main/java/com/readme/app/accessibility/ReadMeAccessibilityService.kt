@@ -42,6 +42,9 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        try {
+            com.readme.app.reading.service.ReadMeReadingService.syncService(this)
+        } catch (e: Exception) {}
     }
 
     override fun onDestroy() {
@@ -49,6 +52,9 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         if (instance === this) {
             instance = null
         }
+        try {
+            com.readme.app.reading.service.ReadMeReadingService.syncService(this)
+        } catch (e: Exception) {}
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -69,7 +75,10 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
             val pkg = root.packageName?.toString() ?: ""
             if (pkg.isBlank() || pkg == packageName) {
                 // ReadMe self-filter
-                return null
+                return CrossAppTextSnapshot(
+                    sourcePackageName = packageName,
+                    blocks = emptyList()
+                )
             }
 
             val gen = generationCounter.incrementAndGet()
@@ -100,13 +109,20 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
                 val pkg = currentRoot.packageName?.toString() ?: ""
                 if (pkg.isNotBlank() && pkg != packageName) {
                     val hasSensitive = detectSensitiveFields(currentRoot)
+                    val rootBounds = android.graphics.Rect()
+                    currentRoot.getBoundsInScreen(rootBounds)
+                    if (rootBounds.isEmpty) {
+                        val dm = resources.displayMetrics
+                        rootBounds.set(0, 0, dm.widthPixels, dm.heightPixels)
+                    }
                     return CrossAppWindowTarget(
                         packageName = pkg,
                         windowId = currentRoot.windowId,
                         displayId = 0,
                         requestId = System.currentTimeMillis(),
                         generation = generationCounter.incrementAndGet(),
-                        isSensitiveOrPassword = hasSensitive
+                        isSensitiveOrPassword = hasSensitive,
+                        windowBounds = rootBounds
                     )
                 }
             }
@@ -126,13 +142,23 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
                     val pkg = root?.packageName?.toString() ?: ""
                     if (pkg.isNotBlank() && pkg != packageName) {
                         val hasSensitive = root?.let { detectSensitiveFields(it) } ?: false
+                        val winBounds = android.graphics.Rect()
+                        win.getBoundsInScreen(winBounds)
+                        if (winBounds.isEmpty) {
+                            root?.getBoundsInScreen(winBounds)
+                        }
+                        if (winBounds.isEmpty) {
+                            val dm = resources.displayMetrics
+                            winBounds.set(0, 0, dm.widthPixels, dm.heightPixels)
+                        }
                         return CrossAppWindowTarget(
                             packageName = pkg,
                             windowId = win.id,
                             displayId = win.displayId,
                             requestId = System.currentTimeMillis(),
                             generation = generationCounter.incrementAndGet(),
-                            isSensitiveOrPassword = hasSensitive
+                            isSensitiveOrPassword = hasSensitive,
+                            windowBounds = winBounds
                         )
                     }
                 } finally {

@@ -20,7 +20,8 @@ object CrossAppReadingCoordinator {
         ocrEngine: CrossAppOcrEngine?,
         request: CrossAppAcquisitionRequest? = null,
         target: CrossAppWindowTarget? = null,
-        appLabel: String? = null
+        appLabel: String? = null,
+        selectedRegion: android.graphics.Rect? = null
     ): UnifiedCrossAppAcquisitionResult {
         if (!busyMutex.tryLock()) {
             // Already busy. Either reject or cancel previous. We reject to keep it simple and safe.
@@ -44,7 +45,8 @@ object CrossAppReadingCoordinator {
                         capturer = screenshotCapturer,
                         ocrEngine = ocrEngine,
                         target = target,
-                        appLabel = appLabel
+                        appLabel = appLabel,
+                        selectedRegion = selectedRegion
                     )
                     mapOcrResult(result)
                 }

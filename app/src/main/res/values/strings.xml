@@ -8,4 +8,7 @@
     <string name="screen_ocr_disclosure_message">When you explicitly tap \"Read Screen\", ReadMe captures a single snapshot of the current foreground app window using Android\'s accessibility screenshot capability and performs on-device OCR to read visually rendered text aloud.\n\n• User-initiated only: Capture only runs when you explicitly tap \"Read Screen\". Never runs automatically.\n• On-device processing: Images are processed entirely locally and never uploaded to any server or cloud service.\n• Zero permanent storage: The screenshot bitmap is immediately deleted from memory after recognition and is never stored on disk.\n• Security protection: Password fields and secure windows (FLAG_SECURE) cannot be captured.</string>
     <string name="read_current_text_button">Read Current Text</string>
     <string name="read_screen_button">Read Screen</string>
+    <string name="accessibility_disclosure_action">Go to Settings</string>
+    <string name="screen_ocr_disclosure_action">Allow &amp; Continue</string>
+    <string name="cancel">Cancel</string>
 </resources>

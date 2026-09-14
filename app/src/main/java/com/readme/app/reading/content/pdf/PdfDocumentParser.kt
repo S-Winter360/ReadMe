@@ -43,11 +43,17 @@ class PdfDocumentParser(
 
             var pageText = ""
             var fromOcr = false
+            val textSpans = mutableListOf<Triple<Int, Int, List<android.graphics.RectF>>>()
 
             if (textContents != null && textContents.isNotEmpty()) {
                 val textBuilder = java.lang.StringBuilder()
                 for (textContent in textContents) {
-                    textBuilder.append(textContent.text).append(" ")
+                    val start = textBuilder.length
+                    textBuilder.append(textContent.text)
+                    val end = textBuilder.length
+                    textBuilder.append(" ")
+                    val bList = try { textContent.bounds } catch (_: Throwable) { emptyList<android.graphics.RectF>() }
+                    textSpans.add(Triple(start, end, bList))
                 }
                 pageText = textBuilder.toString()
             }
@@ -135,13 +141,28 @@ class PdfDocumentParser(
                 }
 
                 if (allSentences.isNotEmpty()) {
+                    var searchOffset = 0
                     val sectionSegments = allSentences.mapIndexed { index, sentence ->
                         val segmentId = if (fromOcr) {
                             "pdf:$documentId:page:$page:ocr:$index"
                         } else {
                             "page:$page:segment:$index"
                         }
-                        ReadingSegment(id = segmentId, text = sentence)
+                        val sentenceBounds = mutableListOf<android.graphics.RectF>()
+                        if (!fromOcr && textSpans.isNotEmpty()) {
+                            val sIdx = pageText.indexOf(sentence, searchOffset)
+                            val actualStart = if (sIdx >= 0) sIdx else searchOffset
+                            val actualEnd = actualStart + sentence.length
+                            if (sIdx >= 0) {
+                                searchOffset = actualEnd
+                            }
+                            for (span in textSpans) {
+                                if (span.first < actualEnd && span.second > actualStart) {
+                                    sentenceBounds.addAll(span.third)
+                                }
+                            }
+                        }
+                        ReadingSegment(id = segmentId, text = sentence, boundingBoxes = sentenceBounds)
                     }
 
                     sections.add(

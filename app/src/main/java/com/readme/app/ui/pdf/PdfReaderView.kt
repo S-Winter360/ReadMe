@@ -46,6 +46,8 @@ import kotlinx.coroutines.Dispatchers
 fun PdfReaderView(
     uri: Uri,
     modifier: Modifier = Modifier,
+    currentSegment: com.readme.app.reading.ReadingSegment? = null,
+    isReading: Boolean = false,
     onViewportChanged: (PdfViewportState) -> Unit = {},
     onNavigatorReady: (PdfPageNavigator?) -> Unit = {},
     onError: (Throwable) -> Unit = {}
@@ -54,10 +56,34 @@ fun PdfReaderView(
     var pdfDocument by remember(uri) { mutableStateOf<PdfDocument?>(null) }
     var isLoading by remember(uri) { mutableStateOf(true) }
     var errorMessage by remember(uri) { mutableStateOf<String?>(null) }
+    var activePdfView by remember { mutableStateOf<PdfView?>(null) }
 
     val currentOnViewportChanged by rememberUpdatedState(onViewportChanged)
     val currentOnNavigatorReady by rememberUpdatedState(onNavigatorReady)
     val currentOnError by rememberUpdatedState(onError)
+
+    LaunchedEffect(currentSegment, isReading, activePdfView) {
+        val view = activePdfView ?: return@LaunchedEffect
+        if (!isReading || currentSegment == null || currentSegment.boundingBoxes.isEmpty()) {
+            try {
+                view.setHighlights(emptyList())
+            } catch (_: Throwable) {}
+        } else {
+            val pageNum = if (currentSegment.id.contains("page:")) {
+                currentSegment.id.substringAfter("page:").substringBefore(":").toIntOrNull() ?: 0
+            } else 0
+
+            val highlights = currentSegment.boundingBoxes.map { rect ->
+                androidx.pdf.Highlight(
+                    androidx.pdf.PdfRect(pageNum, rect),
+                    android.graphics.Color.argb(80, 0, 180, 216) // Soft pulsing teal
+                )
+            }
+            try {
+                view.setHighlights(highlights)
+            } catch (_: Throwable) {}
+        }
+    }
 
     LaunchedEffect(uri) {
         isLoading = true
@@ -139,16 +165,19 @@ fun PdfReaderView(
                             listenerRef = listener
                             addOnViewportChangedListener(listener)
                             this.pdfDocument = document
+                            activePdfView = this
                             currentOnNavigatorReady(PdfViewPageNavigator { this })
                         }
                     },
                     update = { view ->
+                        activePdfView = view
                         if (view.pdfDocument != document) {
                             view.pdfDocument = document
                         }
                         currentOnNavigatorReady(PdfViewPageNavigator { view })
                     },
                     onRelease = { view ->
+                        activePdfView = null
                         currentOnNavigatorReady(null)
                         listenerRef?.let { listener ->
                             view.removeOnViewportChangedListener(listener)

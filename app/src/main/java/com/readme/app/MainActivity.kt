@@ -28,5 +28,6 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         com.readme.app.reading.service.ReadMeReadingSessionRuntime.getInstance(applicationContext).setAppForeground(false)
+        com.readme.app.reading.service.ReadMeReadingService.syncService(applicationContext)
     }
 }

@@ -23,8 +23,13 @@ fun ReadMeApp(viewModel: ReadMeViewModel = viewModel()) {
     when (currentScreen) {
         Screen.Home -> ReadMeScreen(
             viewModel = viewModel,
+            onNavigateToSettings = { currentScreen = Screen.Settings },
             onNavigateToHowToUse = { currentScreen = Screen.HowToUse },
             onNavigateToAbout = { currentScreen = Screen.About }
+        )
+        Screen.Settings -> SettingsScreen(
+            viewModel = viewModel,
+            onNavigateBack = { currentScreen = Screen.Home }
         )
         Screen.HowToUse -> HowToUseScreen(
             onNavigateBack = { currentScreen = Screen.Home }

@@ -43,7 +43,8 @@ object CrossAppOcrCoordinator {
         capturer: CrossAppScreenshotCapturer?,
         ocrEngine: CrossAppOcrEngine,
         target: CrossAppWindowTarget?,
-        appLabel: String? = null
+        appLabel: String? = null,
+        selectedRegion: android.graphics.Rect? = null
     ): CrossAppOcrAcquisitionResult = withContext(Dispatchers.Default) {
         if (capturer == null) {
             return@withContext CrossAppOcrAcquisitionResult.ServiceNotConnected
@@ -65,6 +66,14 @@ object CrossAppOcrCoordinator {
             return@withContext CrossAppOcrAcquisitionResult.SensitiveContentBlocked
         }
 
+        // Validate selectedRegion against target window bounds if supplied
+        val clampedRegion = if (selectedRegion != null) {
+            val winBounds = if (!target.windowBounds.isEmpty) target.windowBounds else selectedRegion
+            ScreenGeometryMapper.clampRegion(selectedRegion, winBounds) ?: return@withContext CrossAppOcrAcquisitionResult.NoTextRecognized
+        } else {
+            null
+        }
+
         val captureResult = capturer.captureWindow(target)
         when (captureResult) {
             is ScreenshotCaptureResult.ApiNotSupported -> CrossAppOcrAcquisitionResult.ApiNotSupported
@@ -81,15 +90,53 @@ object CrossAppOcrCoordinator {
             is ScreenshotCaptureResult.Error -> CrossAppOcrAcquisitionResult.Error(captureResult.message)
             is ScreenshotCaptureResult.Success -> {
                 val snapshot = captureResult.snapshot
+                val winBounds = if (!target.windowBounds.isEmpty) target.windowBounds else android.graphics.Rect(0, 0, snapshot.width, snapshot.height)
+                val winW = winBounds.width().coerceAtLeast(1)
+                val winH = winBounds.height().coerceAtLeast(1)
+                val scaleX = snapshot.width.toFloat() / winW
+                val scaleY = snapshot.height.toFloat() / winH
+
+                val cropRect = if (clampedRegion != null) {
+                    ScreenGeometryMapper.calculateCropRect(clampedRegion, winBounds, snapshot.width, snapshot.height)
+                } else {
+                    android.graphics.Rect(0, 0, snapshot.width, snapshot.height)
+                }
+
+                var croppedBitmap: android.graphics.Bitmap? = null
                 try {
-                    val ocrResult = ocrEngine.recognize(snapshot.bitmap)
+                    val bitmapToProcess = if (clampedRegion != null && (cropRect.width() < snapshot.width || cropRect.height() < snapshot.height)) {
+                        croppedBitmap = android.graphics.Bitmap.createBitmap(
+                            snapshot.bitmap,
+                            cropRect.left,
+                            cropRect.top,
+                            cropRect.width(),
+                            cropRect.height()
+                        )
+                        croppedBitmap
+                    } else {
+                        snapshot.bitmap
+                    }
+
+                    val ocrResult = ocrEngine.recognize(bitmapToProcess)
                     if (!ocrResult.hasText || ocrResult.text.isBlank()) {
                         return@withContext CrossAppOcrAcquisitionResult.NoTextRecognized
                     }
 
-                    val document = CrossAppDocumentParser.parseOcrText(
+                    val mappedSentences = ocrResult.sentences.map {
+                        ScreenGeometryMapper.mapSentenceGeometryToScreen(
+                            sentence = it,
+                            cropRect = cropRect,
+                            scaleX = scaleX,
+                            scaleY = scaleY,
+                            windowLeft = winBounds.left.toFloat(),
+                            windowTop = winBounds.top.toFloat()
+                        )
+                    }
+
+                    val finalOcrResult = ocrResult.copy(sentences = mappedSentences)
+                    val document = CrossAppDocumentParser.parseOcrResult(
                         target = target,
-                        ocrText = ocrResult.text,
+                        ocrResult = finalOcrResult,
                         appLabel = appLabel
                     )
 
@@ -105,6 +152,9 @@ object CrossAppOcrCoordinator {
                 } catch (e: Throwable) {
                     CrossAppOcrAcquisitionResult.Error(e.message ?: "OCR recognition failed")
                 } finally {
+                    try {
+                        croppedBitmap?.recycle()
+                    } catch (_: Throwable) {}
                     snapshot.recycle()
                 }
             }
