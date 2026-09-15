@@ -47,7 +47,8 @@ data class CrossAppOcrResult(
     val blocks: List<CrossAppOcrBlock> = emptyList(),
     val lines: List<CrossAppOcrLine> = emptyList(),
     val sentences: List<CrossAppOcrSentence> = emptyList(),
-    val confidenceOrNull: Float? = null
+    val confidenceOrNull: Float? = null,
+    val errorMessage: String? = null
 )
 
 /**
@@ -97,7 +98,26 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
                         } catch (_: Throwable) {
                             null
                         }
-                        val matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
+                        var matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
+
+                        // Fallback: If normalized sentence didn't match directly, search by non-trivial words
+                        if (matchRects.isEmpty() && trimmed.length > 5) {
+                            val words = trimmed.split(Regex("\\s+")).filter { it.length >= 3 }
+                            val wordRects = mutableListOf<RectF>()
+                            for (w in words.take(6)) {
+                                try {
+                                    val wb = result?.getSearchBounds(w, false)
+                                    val r = wb?.firstOrNull()?.map { RectF(it) }
+                                    if (!r.isNullOrEmpty()) {
+                                        wordRects.addAll(r)
+                                    }
+                                } catch (_: Throwable) {}
+                            }
+                            if (wordRects.isNotEmpty()) {
+                                matchRects = wordRects
+                            }
+                        }
+
                         val unionBounds = if (matchRects.isNotEmpty()) {
                             val union = RectF(matchRects.first())
                             matchRects.forEach { union.union(it) }
@@ -128,7 +148,8 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
             CrossAppOcrResult(
                 text = "",
                 hasText = false,
-                confidenceOrNull = null
+                confidenceOrNull = null,
+                errorMessage = e.message ?: e.javaClass.simpleName
             )
         }
     }

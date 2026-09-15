@@ -85,6 +85,9 @@ object CrossAppReadingCoordinator {
             is CrossAppOcrAcquisitionResult.ServiceNotConnected -> UnifiedCrossAppAcquisitionResult.ServiceUnavailable
             is CrossAppOcrAcquisitionResult.InvalidTarget -> UnifiedCrossAppAcquisitionResult.InvalidTarget
             is CrossAppOcrAcquisitionResult.NoTextRecognized -> UnifiedCrossAppAcquisitionResult.NoTextAvailable
+            is CrossAppOcrAcquisitionResult.SelectedAreaTooSmall -> UnifiedCrossAppAcquisitionResult.SelectedAreaTooSmall(result.width, result.height)
+            is CrossAppOcrAcquisitionResult.SelectedAreaOutsideWindow -> UnifiedCrossAppAcquisitionResult.SelectedAreaOutsideWindow
+            is CrossAppOcrAcquisitionResult.CaptureUnavailable -> UnifiedCrossAppAcquisitionResult.CaptureUnavailable(result.message)
             is CrossAppOcrAcquisitionResult.RateLimited -> UnifiedCrossAppAcquisitionResult.RateLimited
             is CrossAppOcrAcquisitionResult.ReadMeSelfIgnored -> UnifiedCrossAppAcquisitionResult.ReadMeSelfIgnored
             is CrossAppOcrAcquisitionResult.SecureWindow -> UnifiedCrossAppAcquisitionResult.SecureWindow

@@ -15,7 +15,8 @@ data class CrossAppImageSnapshot(
     val generation: Long,
     val bitmap: Bitmap,
     val width: Int = bitmap.width,
-    val height: Int = bitmap.height
+    val height: Int = bitmap.height,
+    val density: Int = try { bitmap.density } catch (_: Throwable) { 0 }
 ) {
     fun recycle() {
         try {

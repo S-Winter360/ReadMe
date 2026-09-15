@@ -236,6 +236,9 @@ class ReadMeReadingService : Service() {
             } else {
                 val msg = when (result) {
                     is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.NoTextAvailable -> "No readable text found"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaTooSmall -> "Selected area too small"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaOutsideWindow -> "Selected area outside active window"
+                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.CaptureUnavailable -> "Capture unavailable: ${result.details}"
                     is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ReadMeSelfIgnored -> "Switch to another app to read"
                     is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ServiceUnavailable -> "Service unavailable"
                     is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.AppSwitched -> "Cancelled (app switched)"

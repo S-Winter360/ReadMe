@@ -58,10 +58,14 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         } catch (e: Exception) {}
     }
 
+    private val IGNORED_SYSTEM_PACKAGES by lazy {
+        setOf("com.android.systemui", packageName)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString()
-        if (!pkg.isNullOrBlank() && pkg != packageName) {
+        if (!pkg.isNullOrBlank() && pkg !in IGNORED_SYSTEM_PACKAGES) {
             currentActivePackage = pkg
             _activePackageFlow.value = pkg
         }
@@ -75,10 +79,10 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         val root = rootInActiveWindow ?: return null
         return try {
             val pkg = root.packageName?.toString() ?: ""
-            if (pkg.isBlank() || pkg == packageName) {
-                // ReadMe self-filter
+            if (pkg.isBlank() || pkg in IGNORED_SYSTEM_PACKAGES) {
+                // ReadMe self-filter or system bar filter
                 return CrossAppTextSnapshot(
-                    sourcePackageName = packageName,
+                    sourcePackageName = pkg.ifBlank { packageName },
                     blocks = emptyList()
                 )
             }
@@ -105,11 +109,73 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
     override fun identifyTargetWindow(): CrossAppWindowTarget? {
         if (!isSupported) return null
 
+        // 1. Check interactive windows, strictly prioritizing application windows (TYPE_APPLICATION)
+        val windowList = try { windows } catch (_: Throwable) { null }
+        if (windowList != null) {
+            // First pass: look for TYPE_APPLICATION windows
+            val appWindows = windowList.filter { win ->
+                win.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION
+            }
+
+            // If currentActivePackage is set, prioritize matching application window
+            val preferredWindow = if (!currentActivePackage.isNullOrBlank()) {
+                appWindows.firstOrNull { win ->
+                    val root = try { win.root } catch (_: Throwable) { null }
+                    try {
+                        root?.packageName?.toString() == currentActivePackage
+                    } finally {
+                        try {
+                            @Suppress("DEPRECATION")
+                            root?.recycle()
+                        } catch (_: Throwable) {}
+                    }
+                }
+            } else {
+                null
+            }
+
+            val targetWin = preferredWindow ?: appWindows.firstOrNull()
+
+            if (targetWin != null) {
+                val root = try { targetWin.root } catch (_: Throwable) { null }
+                try {
+                    val pkg = root?.packageName?.toString() ?: currentActivePackage ?: ""
+                    if (pkg.isNotBlank() && pkg !in IGNORED_SYSTEM_PACKAGES) {
+                        val hasSensitive = root?.let { detectSensitiveFields(it) } ?: false
+                        val winBounds = android.graphics.Rect()
+                        targetWin.getBoundsInScreen(winBounds)
+                        if (winBounds.isEmpty) {
+                            root?.getBoundsInScreen(winBounds)
+                        }
+                        if (winBounds.isEmpty) {
+                            val dm = resources.displayMetrics
+                            winBounds.set(0, 0, dm.widthPixels, dm.heightPixels)
+                        }
+                        return CrossAppWindowTarget(
+                            packageName = pkg,
+                            windowId = targetWin.id,
+                            displayId = targetWin.displayId,
+                            requestId = System.currentTimeMillis(),
+                            generation = generationCounter.incrementAndGet(),
+                            isSensitiveOrPassword = hasSensitive,
+                            windowBounds = winBounds
+                        )
+                    }
+                } finally {
+                    try {
+                        @Suppress("DEPRECATION")
+                        root?.recycle()
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+
+        // 2. Fallback to rootInActiveWindow only if not in IGNORED_SYSTEM_PACKAGES
         val currentRoot = try { rootInActiveWindow } catch (_: Throwable) { null }
         try {
             if (currentRoot != null) {
                 val pkg = currentRoot.packageName?.toString() ?: ""
-                if (pkg.isNotBlank() && pkg != packageName) {
+                if (pkg.isNotBlank() && pkg !in IGNORED_SYSTEM_PACKAGES) {
                     val hasSensitive = detectSensitiveFields(currentRoot)
                     val rootBounds = android.graphics.Rect()
                     currentRoot.getBoundsInScreen(rootBounds)
@@ -133,43 +199,6 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
                 @Suppress("DEPRECATION")
                 currentRoot?.recycle()
             } catch (_: Throwable) {}
-        }
-
-        // If rootInActiveWindow was null or ReadMe itself, check interactive windows
-        val windowList = try { windows } catch (_: Throwable) { null }
-        if (windowList != null) {
-            for (win in windowList) {
-                val root = try { win.root } catch (_: Throwable) { null }
-                try {
-                    val pkg = root?.packageName?.toString() ?: ""
-                    if (pkg.isNotBlank() && pkg != packageName) {
-                        val hasSensitive = root?.let { detectSensitiveFields(it) } ?: false
-                        val winBounds = android.graphics.Rect()
-                        win.getBoundsInScreen(winBounds)
-                        if (winBounds.isEmpty) {
-                            root?.getBoundsInScreen(winBounds)
-                        }
-                        if (winBounds.isEmpty) {
-                            val dm = resources.displayMetrics
-                            winBounds.set(0, 0, dm.widthPixels, dm.heightPixels)
-                        }
-                        return CrossAppWindowTarget(
-                            packageName = pkg,
-                            windowId = win.id,
-                            displayId = win.displayId,
-                            requestId = System.currentTimeMillis(),
-                            generation = generationCounter.incrementAndGet(),
-                            isSensitiveOrPassword = hasSensitive,
-                            windowBounds = winBounds
-                        )
-                    }
-                } finally {
-                    try {
-                        @Suppress("DEPRECATION")
-                        root?.recycle()
-                    } catch (_: Throwable) {}
-                }
-            }
         }
 
         return null
@@ -233,6 +262,7 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
                                 if (hwBitmap != null) {
                                     softwareBitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
                                     hwBitmap.recycle()
+                                    softwareBitmap?.density = resources.displayMetrics.densityDpi
                                 }
                             } catch (e: Throwable) {
                                 softwareBitmap?.recycle()
