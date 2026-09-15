@@ -1,7 +1,10 @@
 package com.readme.app.ui.overlay
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -20,9 +23,10 @@ import android.view.animation.AccelerateDecelerateInterpolator
  * Characteristics:
  * - Completely non-interactive (FLAG_NOT_TOUCHABLE, FLAG_NOT_FOCUSABLE)
  * - Transparent canvas outside the highlighted sentence rectangles
- * - Supports multi-line sentence bounding boxes
+ * - Supports multi-line sentence bounding boxes with clean line merging
  * - Soft animated breathing/pulse effect
- * - Immediate clean removal on speech stop, pause, document switch, or error
+ * - Smooth cross-fade transition between sentences
+ * - Immediate clean removal on speech stop, pause, document switch, app switch, or error
  */
 class ScreenHighlightOverlayController(private val context: Context) {
 
@@ -31,13 +35,19 @@ class ScreenHighlightOverlayController(private val context: Context) {
 
     private var highlightView: View? = null
     private var isAdded = false
+
     private var currentRects: List<RectF> = emptyList()
-    private var pulseAlpha: Float = 0.35f
+    private var previousRects: List<RectF> = emptyList()
+
+    private var pulseAlpha: Float = 0.28f
     private var pulseAnimator: ValueAnimator? = null
 
+    private var transitionProgress: Float = 1.0f
+    private var transitionAnimator: ValueAnimator? = null
+
     init {
-        pulseAnimator = ValueAnimator.ofFloat(0.22f, 0.42f).apply {
-            duration = 1100
+        pulseAnimator = ValueAnimator.ofFloat(0.20f, 0.36f).apply {
+            duration = 1400
             repeatMode = ValueAnimator.REVERSE
             repeatCount = ValueAnimator.INFINITE
             interpolator = AccelerateDecelerateInterpolator()
@@ -52,16 +62,41 @@ class ScreenHighlightOverlayController(private val context: Context) {
 
     /**
      * Updates the active highlight with the provided bounding rectangles.
-     * If the list is empty, clears and hides the highlight overlay.
+     * Merges adjacent segments on the same line and smoothly cross-fades from the previous sentence.
      */
     fun showHighlight(rectangles: List<RectF>) {
-        val validRects = rectangles.filter { !it.isEmpty }
+        val validRects = combineAdjacentLineRectangles(rectangles.filter { !it.isEmpty && it.width() > 0 && it.height() > 0 })
         if (validRects.isEmpty()) {
             clearHighlight()
             return
         }
 
-        currentRects = validRects
+        if (currentRects.isNotEmpty() && currentRects != validRects) {
+            // Smoothly cross-fade from previous sentence to new sentence
+            previousRects = currentRects
+            currentRects = validRects
+            transitionAnimator?.cancel()
+            transitionAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 180
+                interpolator = AccelerateDecelerateInterpolator()
+                addUpdateListener { anim ->
+                    transitionProgress = anim.animatedValue as Float
+                    highlightView?.invalidate()
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        previousRects = emptyList()
+                        transitionProgress = 1.0f
+                        highlightView?.invalidate()
+                    }
+                })
+            }
+            transitionAnimator?.start()
+        } else {
+            currentRects = validRects
+            previousRects = emptyList()
+            transitionProgress = 1.0f
+        }
 
         if (!isAdded) {
             attachOverlay()
@@ -78,6 +113,9 @@ class ScreenHighlightOverlayController(private val context: Context) {
      */
     fun clearHighlight() {
         currentRects = emptyList()
+        previousRects = emptyList()
+        transitionProgress = 1.0f
+        transitionAnimator?.cancel()
         pulseAnimator?.cancel()
         if (isAdded) {
             try {
@@ -101,35 +139,58 @@ class ScreenHighlightOverlayController(private val context: Context) {
             private val strokePaint = Paint().apply {
                 isAntiAlias = true
                 style = Paint.Style.STROKE
-                strokeWidth = 4f
-                color = Color.parseColor("#00B4D8") // Teal accent
+                strokeWidth = 2.5f
             }
             private val glowPaint = Paint().apply {
                 isAntiAlias = true
                 style = Paint.Style.STROKE
-                strokeWidth = 10f
-                color = Color.parseColor("#4000B4D8")
+                strokeWidth = 8f
+            }
+
+            override fun onConfigurationChanged(newConfig: Configuration?) {
+                super.onConfigurationChanged(newConfig)
+                // When screen rotates, existing highlight coordinates are stale; clear safely
+                clearHighlight()
             }
 
             override fun onDraw(canvas: Canvas) {
                 super.onDraw(canvas)
-                if (currentRects.isEmpty()) return
+                if (currentRects.isEmpty() && previousRects.isEmpty()) return
 
-                val alphaInt = (pulseAlpha * 255).toInt().coerceIn(0, 255)
-                fillPaint.color = Color.argb(alphaInt, 0, 180, 216) // Soft pulsing teal
+                // Draw fading-out previous sentence if cross-fading
+                if (previousRects.isNotEmpty() && transitionProgress < 1.0f) {
+                    val prevAlphaMul = (1.0f - transitionProgress).coerceIn(0f, 1f)
+                    drawRectangles(canvas, previousRects, prevAlphaMul)
+                }
 
-                for (rect in currentRects) {
+                // Draw fading-in / active sentence
+                if (currentRects.isNotEmpty()) {
+                    val currAlphaMul = if (previousRects.isNotEmpty()) transitionProgress else 1.0f
+                    drawRectangles(canvas, currentRects, currAlphaMul)
+                }
+            }
+
+            private fun drawRectangles(canvas: Canvas, rects: List<RectF>, alphaMultiplier: Float) {
+                val fillAlpha = (pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
+                val strokeAlpha = (0.55f * alphaMultiplier * 255).toInt().coerceIn(0, 255)
+                val glowAlpha = (0.22f * pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
+
+                fillPaint.color = Color.argb(fillAlpha, 0, 180, 216)      // Translucent teal fill
+                strokePaint.color = Color.argb(strokeAlpha, 0, 180, 216)  // Delicate crisp border
+                glowPaint.color = Color.argb(glowAlpha, 0, 180, 216)      // Soft outer ambient halo
+
+                for (rect in rects) {
                     val padded = RectF(
                         rect.left - 4f,
                         rect.top - 2f,
                         rect.right + 4f,
                         rect.bottom + 2f
                     )
-                    // Draw outer soft glow
+                    // Draw outer soft glow halo
                     canvas.drawRoundRect(padded, 8f, 8f, glowPaint)
                     // Draw translucent fill
                     canvas.drawRoundRect(padded, 8f, 8f, fillPaint)
-                    // Draw subtle border
+                    // Draw delicate subtle border
                     canvas.drawRoundRect(padded, 8f, 8f, strokePaint)
                 }
             }
@@ -165,8 +226,45 @@ class ScreenHighlightOverlayController(private val context: Context) {
         }
     }
 
+    /**
+     * Merges adjacent rectangles that lie on the same visual horizontal line.
+     * Prevents overlapping translucent seams when OCR yields word fragments or multiple blocks.
+     */
+    private fun combineAdjacentLineRectangles(rects: List<RectF>): List<RectF> {
+        if (rects.size <= 1) return rects
+
+        val sorted = rects.sortedWith(compareBy({ it.top }, { it.left }))
+        val merged = mutableListOf<RectF>()
+
+        for (rect in sorted) {
+            if (merged.isEmpty()) {
+                merged.add(RectF(rect))
+                continue
+            }
+
+            val last = merged.last()
+            val verticalOverlap = minOf(last.bottom, rect.bottom) - maxOf(last.top, rect.top)
+            val minHeight = minOf(last.height(), rect.height()).coerceAtLeast(1f)
+            val isSameLine = verticalOverlap > (minHeight * 0.5f)
+            val horizontalGap = rect.left - last.right
+
+            if (isSameLine && horizontalGap <= 24f && horizontalGap >= -16f) {
+                // Merge into single continuous line box
+                last.left = minOf(last.left, rect.left)
+                last.top = minOf(last.top, rect.top)
+                last.right = maxOf(last.right, rect.right)
+                last.bottom = maxOf(last.bottom, rect.bottom)
+            } else {
+                merged.add(RectF(rect))
+            }
+        }
+
+        return merged
+    }
+
     fun destroy() {
         clearHighlight()
         pulseAnimator = null
+        transitionAnimator = null
     }
 }

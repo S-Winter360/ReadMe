@@ -76,6 +76,18 @@ class ReadMeReadingService : Service() {
                 }
             }
         }
+
+        serviceScope.launch {
+            ReadMeAccessibilityService.activePackageFlow.collect { activePkg ->
+                val docState = sessionRuntime.activeDocumentState.value
+                if (docState.isEphemeral && !docState.sourcePackageName.isNullOrBlank()) {
+                    if (!activePkg.isNullOrBlank() && activePkg != packageName && activePkg != docState.sourcePackageName) {
+                        // User switched to another app: clear overlay highlight immediately
+                        highlightOverlayController?.clearHighlight()
+                    }
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

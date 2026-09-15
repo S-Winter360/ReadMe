@@ -87,15 +87,20 @@ class ScreenRegionSelectionController(private val context: Context) {
             private val borderPaint = Paint().apply {
                 color = Color.parseColor("#00B4D8") // Teal accent
                 style = Paint.Style.STROKE
-                strokeWidth = 6f
+                strokeWidth = 5f
                 isAntiAlias = true
             }
             private val fillPaint = Paint().apply {
-                color = Color.parseColor("#2200B4D8") // Subtle translucent teal fill
+                color = Color.parseColor("#1A00B4D8") // Subtle translucent teal fill
                 style = Paint.Style.FILL
             }
-            private val cornerPaint = Paint().apply {
+            private val outerHandlePaint = Paint().apply {
                 color = Color.parseColor("#00B4D8")
+                style = Paint.Style.FILL
+                isAntiAlias = true
+            }
+            private val innerHandlePaint = Paint().apply {
+                color = Color.WHITE
                 style = Paint.Style.FILL
                 isAntiAlias = true
             }
@@ -116,12 +121,19 @@ class ScreenRegionSelectionController(private val context: Context) {
                 canvas.drawRoundRect(rf, 12f, 12f, fillPaint)
                 canvas.drawRoundRect(rf, 12f, 12f, borderPaint)
 
-                // Draw corner handles
-                val handleRadius = 14f
-                canvas.drawCircle(rf.left, rf.top, handleRadius, cornerPaint)
-                canvas.drawCircle(rf.right, rf.top, handleRadius, cornerPaint)
-                canvas.drawCircle(rf.left, rf.bottom, handleRadius, cornerPaint)
-                canvas.drawCircle(rf.right, rf.bottom, handleRadius, cornerPaint)
+                // Draw prominent, comfortable corner handles
+                val outerRadius = 18f
+                val innerRadius = 7f
+                val corners = listOf(
+                    rf.left to rf.top,
+                    rf.right to rf.top,
+                    rf.left to rf.bottom,
+                    rf.right to rf.bottom
+                )
+                for ((cx, cy) in corners) {
+                    canvas.drawCircle(cx, cy, outerRadius, outerHandlePaint)
+                    canvas.drawCircle(cx, cy, innerRadius, innerHandlePaint)
+                }
             }
         }
 
@@ -199,11 +211,14 @@ class ScreenRegionSelectionController(private val context: Context) {
         }
         root.addView(buttonBar, buttonBarParams)
 
-        // Touch handling: Drag / Resize
-        var touchMode = 0 // 0 = none, 1 = drag, 2 = resize top-left, 3 = top-right, 4 = bottom-left, 5 = bottom-right
+        // Touch handling: Drag / Resize / Free-drag in ANY direction
+        var touchMode = 0 // 0 = none, 1 = drag, 2 = resize TL, 3 = TR, 4 = BL, 5 = BR, 6 = free-draw
+        var initialDownX = 0f
+        var initialDownY = 0f
         var lastTouchX = 0f
         var lastTouchY = 0f
-        val touchSlop = 60f
+        val handleTouchSlop = 90f // Comfortable ~30dp touch target on physical phones
+        val freeDragThreshold = 16f
 
         canvasView.setOnTouchListener { _, event ->
             val x = event.x
@@ -211,6 +226,8 @@ class ScreenRegionSelectionController(private val context: Context) {
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    initialDownX = x
+                    initialDownY = y
                     lastTouchX = x
                     lastTouchY = y
 
@@ -221,28 +238,12 @@ class ScreenRegionSelectionController(private val context: Context) {
                     val dlBottomRight = Math.hypot((x - currentRect.right).toDouble(), (y - currentRect.bottom).toDouble())
 
                     touchMode = when {
-                        dlTopLeft < touchSlop -> 2
-                        dlTopRight < touchSlop -> 3
-                        dlBottomLeft < touchSlop -> 4
-                        dlBottomRight < touchSlop -> 5
+                        dlTopLeft < handleTouchSlop -> 2
+                        dlTopRight < handleTouchSlop -> 3
+                        dlBottomLeft < handleTouchSlop -> 4
+                        dlBottomRight < handleTouchSlop -> 5
                         currentRect.contains(x.toInt(), y.toInt()) -> 1
-                        else -> {
-                            // Touch outside selection: center selection around touch
-                            val halfW = currentRect.width() / 2
-                            val halfH = currentRect.height() / 2
-                            currentRect.set(
-                                (x - halfW).toInt(),
-                                (y - halfH).toInt(),
-                                (x + halfW).toInt(),
-                                (y + halfH).toInt()
-                            )
-                            val clamped = ScreenGeometryMapper.clampRegion(currentRect, effectiveBounds)
-                            if (clamped != null) {
-                                currentRect.set(clamped)
-                            }
-                            canvasView.invalidate()
-                            1
-                        }
+                        else -> 0 // Might become free-draw or tap-to-move depending on movement
                     }
                     true
                 }
@@ -254,9 +255,16 @@ class ScreenRegionSelectionController(private val context: Context) {
 
                     val minSize = ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX
 
+                    if (touchMode == 0) {
+                        val distFromStart = Math.hypot((x - initialDownX).toDouble(), (y - initialDownY).toDouble())
+                        if (distFromStart > freeDragThreshold) {
+                            touchMode = 6 // Switch to free drag selection in any direction
+                        }
+                    }
+
                     when (touchMode) {
                         1 -> {
-                            // Drag
+                            // Drag existing box
                             val newL = currentRect.left + dx
                             val newT = currentRect.top + dy
                             val newR = currentRect.right + dx
@@ -295,15 +303,71 @@ class ScreenRegionSelectionController(private val context: Context) {
                             currentRect.right = newR.coerceAtMost(effectiveBounds.right)
                             currentRect.bottom = newB.coerceAtMost(effectiveBounds.bottom)
                         }
+                        6 -> {
+                            // Free drag selection in ANY direction (TL to BR, BR to TL, TR to BL, BL to TR)
+                            val left = minOf(initialDownX, x).toInt().coerceIn(effectiveBounds.left, effectiveBounds.right)
+                            val right = maxOf(initialDownX, x).toInt().coerceIn(effectiveBounds.left, effectiveBounds.right)
+                            val top = minOf(initialDownY, y).toInt().coerceIn(effectiveBounds.top, effectiveBounds.bottom)
+                            val bottom = maxOf(initialDownY, y).toInt().coerceIn(effectiveBounds.top, effectiveBounds.bottom)
+                            currentRect.set(left, top, right, bottom)
+                        }
                     }
                     canvasView.invalidate()
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (touchMode == 0) {
+                        // Tapped outside without dragging: center current selection around touch
+                        val halfW = currentRect.width() / 2
+                        val halfH = currentRect.height() / 2
+                        currentRect.set(
+                            (x - halfW).toInt(),
+                            (y - halfH).toInt(),
+                            (x + halfW).toInt(),
+                            (y + halfH).toInt()
+                        )
+                        val clamped = ScreenGeometryMapper.clampRegion(currentRect, effectiveBounds)
+                        if (clamped != null) {
+                            currentRect.set(clamped)
+                        }
+                        canvasView.invalidate()
+                    } else if (touchMode == 6) {
+                        // Ensure minimum size and valid normalization
+                        val clamped = ScreenGeometryMapper.clampRegion(currentRect, effectiveBounds)
+                        if (clamped != null) {
+                            currentRect.set(clamped)
+                        } else {
+                            // Fallback to min box centered on touch
+                            val minSize = ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX
+                            val cX = initialDownX.toInt()
+                            val cY = initialDownY.toInt()
+                            val fallback = Rect(
+                                (cX - minSize / 2).coerceIn(effectiveBounds.left, effectiveBounds.right - minSize),
+                                (cY - minSize / 2).coerceIn(effectiveBounds.top, effectiveBounds.bottom - minSize),
+                                (cX + minSize / 2).coerceIn(effectiveBounds.left + minSize, effectiveBounds.right),
+                                (cY + minSize / 2).coerceIn(effectiveBounds.top + minSize, effectiveBounds.bottom)
+                            )
+                            currentRect.set(fallback)
+                        }
+                        canvasView.invalidate()
+                    }
                     touchMode = 0
                     true
                 }
                 else -> false
+            }
+        }
+
+        // Enable Back button press dismissal
+        root.isFocusableInTouchMode = true
+        root.requestFocus()
+        root.setOnKeyListener { _, keyCode, keyEvent ->
+            if (keyCode == android.view.KeyEvent.KEYCODE_BACK && keyEvent.action == android.view.KeyEvent.ACTION_UP) {
+                dismiss()
+                onCancelled()
+                true
+            } else {
+                false
             }
         }
 

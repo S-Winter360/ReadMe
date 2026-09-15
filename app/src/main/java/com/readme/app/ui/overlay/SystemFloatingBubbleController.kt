@@ -106,6 +106,11 @@ class SystemFloatingBubbleController(private val context: Context) {
         onToggleReading: () -> Unit,
         onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
     ) {
+        if (!Settings.canDrawOverlays(context)) {
+            hide()
+            return
+        }
+
         val bubbleState = getSystemBubbleState(sessionState, activeDocumentState, canAcquireText)
         if (bubbleState == BubbleState.Hidden) {
             hide()
@@ -214,8 +219,10 @@ class SystemFloatingBubbleController(private val context: Context) {
             screenWidth: Int,
             screenHeight: Int
         ): Pair<Int, Int> {
-            val clampedX = x.coerceIn(0, (screenWidth - viewWidth).coerceAtLeast(0))
-            val clampedY = y.coerceIn(0, (screenHeight - viewHeight).coerceAtLeast(0))
+            val effectiveW = if (viewWidth > 0) viewWidth else 180
+            val effectiveH = if (viewHeight > 0) viewHeight else 180
+            val clampedX = x.coerceIn(0, (screenWidth - effectiveW).coerceAtLeast(0))
+            val clampedY = y.coerceIn(0, (screenHeight - effectiveH).coerceAtLeast(0))
             return Pair(clampedX, clampedY)
         }
     }

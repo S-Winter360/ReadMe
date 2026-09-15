@@ -52,6 +52,7 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         if (instance === this) {
             instance = null
         }
+        _activePackageFlow.value = null
         try {
             com.readme.app.reading.service.ReadMeReadingService.syncService(this)
         } catch (e: Exception) {}
@@ -62,6 +63,7 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         val pkg = event.packageName?.toString()
         if (!pkg.isNullOrBlank() && pkg != packageName) {
             currentActivePackage = pkg
+            _activePackageFlow.value = pkg
         }
     }
 
@@ -317,6 +319,9 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         @Volatile
         var instance: ReadMeAccessibilityService? = null
             internal set
+
+        private val _activePackageFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+        val activePackageFlow: kotlinx.coroutines.flow.StateFlow<String?> = _activePackageFlow
 
         val isConnected: Boolean
             get() = instance != null
