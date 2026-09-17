@@ -248,11 +248,39 @@ class ReadMeViewModel @JvmOverloads constructor(
         scheduleRestart(pitch = pitch)
     }
 
+    val isBubbleClosedByUser: StateFlow<Boolean> = sessionRuntime.isBubbleClosedByUser
+
     fun setSystemBubbleEnabled(enabled: Boolean) {
+        setFloatingReadmeEnabled(enabled)
+    }
+
+    fun setFloatingReadmeEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            repository.updateSystemBubbleEnabled(enabled)
+            repository.updateFloatingReadmeEnabled(enabled)
+        }
+        if (enabled) {
+            sessionRuntime.reopenBubble()
         }
         ReadMeReadingService.syncService(getApplication())
+    }
+
+    fun setCrossAppReadingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateCrossAppReadingEnabled(enabled)
+        }
+    }
+
+    fun reopenBubble() {
+        sessionRuntime.reopenBubble()
+        ReadMeReadingService.syncService(getApplication())
+    }
+
+    fun pauseReading() {
+        sessionRuntime.pauseReading()
+    }
+
+    fun resumeReading() {
+        sessionRuntime.resumeReading()
     }
 
     fun selectTextFile(uri: Uri) {
@@ -543,6 +571,9 @@ class ReadMeViewModel @JvmOverloads constructor(
      * Explicitly acquires cross-app content using the unified coordinator based on the requested mode.
      */
     suspend fun acquireAndReadCrossAppContent(mode: CrossAppAcquisitionMode): UnifiedCrossAppAcquisitionResult {
+        if (!settings.value.isCrossAppReadingEnabled) {
+            return UnifiedCrossAppAcquisitionResult.FeatureDisabled
+        }
         val service = ReadMeAccessibilityService.instance
         val targetPkg = service?.currentActivePackage
         val targetWindow = service?.identifyTargetWindow()

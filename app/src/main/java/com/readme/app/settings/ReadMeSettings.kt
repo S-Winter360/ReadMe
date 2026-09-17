@@ -6,5 +6,7 @@ data class ReadMeSettings(
     val speechSpeed: Float = 1.0f,
     val speechPitch: Float = 0.50f,
     val isSystemBubbleEnabled: Boolean = false,
+    val isFloatingReadmeEnabled: Boolean = false,
+    val isCrossAppReadingEnabled: Boolean = false,
     val isScreenOcrConsentGranted: Boolean = false
 )

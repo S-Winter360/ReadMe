@@ -22,7 +22,13 @@ sealed class CrossAppOcrAcquisitionResult {
     object SecureWindow : CrossAppOcrAcquisitionResult()
     object SensitiveContentBlocked : CrossAppOcrAcquisitionResult()
     object RateLimited : CrossAppOcrAcquisitionResult()
-    object NoTextRecognized : CrossAppOcrAcquisitionResult()
+    open class NoTextRecognized : CrossAppOcrAcquisitionResult() {
+        companion object : NoTextRecognized()
+    }
+    object OcrReturnedEmpty : NoTextRecognized()
+    object TextSegmentationEmpty : NoTextRecognized()
+    data class OcrProviderUnavailable(val message: String) : CrossAppOcrAcquisitionResult()
+    data class CropOutsideScreenshot(val details: String) : CrossAppOcrAcquisitionResult()
     data class SelectedAreaTooSmall(val width: Int, val height: Int) : CrossAppOcrAcquisitionResult()
     object SelectedAreaOutsideWindow : CrossAppOcrAcquisitionResult()
     data class CaptureUnavailable(val message: String) : CrossAppOcrAcquisitionResult()
@@ -47,7 +53,9 @@ object CrossAppOcrCoordinator {
         ocrEngine: CrossAppOcrEngine,
         target: CrossAppWindowTarget?,
         appLabel: String? = null,
-        selectedRegion: android.graphics.Rect? = null
+        selectedRegion: android.graphics.Rect? = null,
+        displayWidth: Int = 0,
+        displayHeight: Int = 0
     ): CrossAppOcrAcquisitionResult = withContext(Dispatchers.Default) {
         if (capturer == null) {
             return@withContext CrossAppOcrAcquisitionResult.ServiceNotConnected
@@ -83,21 +91,29 @@ object CrossAppOcrCoordinator {
                 ScreenOcrDiagnostics.record(
                     ScreenOcrDiagnosticRecord(
                         targetPackageName = target.packageName,
-                        windowId = target.windowId,
+                        targetWindowId = target.windowId,
                         windowBounds = winBounds,
                         screenshotWidth = 0,
                         screenshotHeight = 0,
+                        displayWidth = displayWidth,
+                        displayHeight = displayHeight,
                         selectionInUi = selectedRegion,
                         normalizedSelection = normSelection,
                         convertedCropRect = android.graphics.Rect(),
-                        croppedBitmapWidth = 0,
-                        croppedBitmapHeight = 0,
+                        cropWidth = 0,
+                        cropHeight = 0,
+                        ocrInputWidth = 0,
+                        ocrInputHeight = 0,
+                        ocrBlockCount = 0,
+                        ocrLineCount = 0,
+                        ocrElementCount = 0,
                         scaleX = 1f,
                         scaleY = 1f,
                         densityDpi = 0,
                         ocrUpscaleFactor = 1f,
                         ocrTextLength = 0,
                         ocrSentenceCount = 0,
+                        acquisitionResultType = "SelectedAreaOutsideWindow",
                         errorReason = "SelectedAreaOutsideWindow"
                     )
                 )
@@ -115,21 +131,29 @@ object CrossAppOcrCoordinator {
                 ScreenOcrDiagnostics.record(
                     ScreenOcrDiagnosticRecord(
                         targetPackageName = target.packageName,
-                        windowId = target.windowId,
+                        targetWindowId = target.windowId,
                         windowBounds = winBounds,
                         screenshotWidth = 0,
                         screenshotHeight = 0,
+                        displayWidth = displayWidth,
+                        displayHeight = displayHeight,
                         selectionInUi = selectedRegion,
                         normalizedSelection = normSelection,
                         convertedCropRect = android.graphics.Rect(),
-                        croppedBitmapWidth = 0,
-                        croppedBitmapHeight = 0,
+                        cropWidth = 0,
+                        cropHeight = 0,
+                        ocrInputWidth = 0,
+                        ocrInputHeight = 0,
+                        ocrBlockCount = 0,
+                        ocrLineCount = 0,
+                        ocrElementCount = 0,
                         scaleX = 1f,
                         scaleY = 1f,
                         densityDpi = 0,
                         ocrUpscaleFactor = 1f,
                         ocrTextLength = 0,
                         ocrSentenceCount = 0,
+                        acquisitionResultType = "SelectedAreaTooSmall",
                         errorReason = "SelectedAreaTooSmall"
                     )
                 )
@@ -160,21 +184,29 @@ object CrossAppOcrCoordinator {
                 ScreenOcrDiagnostics.record(
                     ScreenOcrDiagnosticRecord(
                         targetPackageName = target.packageName,
-                        windowId = target.windowId,
+                        targetWindowId = target.windowId,
                         windowBounds = winBounds,
                         screenshotWidth = 0,
                         screenshotHeight = 0,
+                        displayWidth = displayWidth,
+                        displayHeight = displayHeight,
                         selectionInUi = selectedRegion ?: android.graphics.Rect(),
                         normalizedSelection = normSelection ?: android.graphics.Rect(),
                         convertedCropRect = android.graphics.Rect(),
-                        croppedBitmapWidth = 0,
-                        croppedBitmapHeight = 0,
+                        cropWidth = 0,
+                        cropHeight = 0,
+                        ocrInputWidth = 0,
+                        ocrInputHeight = 0,
+                        ocrBlockCount = 0,
+                        ocrLineCount = 0,
+                        ocrElementCount = 0,
                         scaleX = 1f,
                         scaleY = 1f,
                         densityDpi = 0,
                         ocrUpscaleFactor = 1f,
                         ocrTextLength = 0,
                         ocrSentenceCount = 0,
+                        acquisitionResultType = "CaptureError",
                         errorReason = "CaptureError: ${captureResult.message}"
                     )
                 )
@@ -183,45 +215,85 @@ object CrossAppOcrCoordinator {
             is ScreenshotCaptureResult.Success -> {
                 val snapshot = captureResult.snapshot
                 val effectiveWinBounds = if (!target.windowBounds.isEmpty) target.windowBounds else ScreenGeometryMapper.makeRect(0, 0, snapshot.width, snapshot.height)
-                val winW = (effectiveWinBounds.right - effectiveWinBounds.left).coerceAtLeast(1)
-                val winH = (effectiveWinBounds.bottom - effectiveWinBounds.top).coerceAtLeast(1)
-                val scaleX = snapshot.width.toFloat() / winW
-                val scaleY = snapshot.height.toFloat() / winH
+
+                val originMode = ScreenGeometryMapper.determineOriginMode(
+                    bitmapWidth = snapshot.width,
+                    bitmapHeight = snapshot.height,
+                    windowBounds = effectiveWinBounds,
+                    displayWidth = displayWidth,
+                    displayHeight = displayHeight
+                )
+
+                val effectiveDispW = if (displayWidth > 0) displayWidth else if (originMode == ScreenGeometryMapper.ScreenshotOriginMode.DISPLAY_ORIGIN) snapshot.width else effectiveWinBounds.width()
+                val effectiveDispH = if (displayHeight > 0) displayHeight else if (originMode == ScreenGeometryMapper.ScreenshotOriginMode.DISPLAY_ORIGIN) snapshot.height else effectiveWinBounds.height()
+
+                val scaleX = if (originMode == ScreenGeometryMapper.ScreenshotOriginMode.DISPLAY_ORIGIN) {
+                    snapshot.width.toFloat() / effectiveDispW.coerceAtLeast(1)
+                } else {
+                    snapshot.width.toFloat() / effectiveWinBounds.width().coerceAtLeast(1)
+                }
+
+                val scaleY = if (originMode == ScreenGeometryMapper.ScreenshotOriginMode.DISPLAY_ORIGIN) {
+                    snapshot.height.toFloat() / effectiveDispH.coerceAtLeast(1)
+                } else {
+                    snapshot.height.toFloat() / effectiveWinBounds.height().coerceAtLeast(1)
+                }
 
                 val cropRect = if (clampedRegion != null) {
-                    ScreenGeometryMapper.calculateCropRect(clampedRegion, effectiveWinBounds, snapshot.width, snapshot.height)
+                    ScreenGeometryMapper.calculateCropRect(
+                        selectionOnScreen = clampedRegion,
+                        windowBounds = effectiveWinBounds,
+                        bitmapWidth = snapshot.width,
+                        bitmapHeight = snapshot.height,
+                        displayWidth = effectiveDispW,
+                        displayHeight = effectiveDispH,
+                        originMode = originMode
+                    )
                 } else {
                     ScreenGeometryMapper.makeRect(0, 0, snapshot.width, snapshot.height)
                 }
 
                 // Validate crop rect if user selected a sub-region
                 if (clampedRegion != null && !ScreenGeometryMapper.isCropValid(cropRect, snapshot.width, snapshot.height)) {
+                    val isOutside = cropRect.left < 0 || cropRect.top < 0 || cropRect.right > snapshot.width || cropRect.bottom > snapshot.height
                     snapshot.recycle()
                     ScreenOcrDiagnostics.record(
                         ScreenOcrDiagnosticRecord(
                             targetPackageName = target.packageName,
-                            windowId = target.windowId,
+                            targetWindowId = target.windowId,
                             windowBounds = effectiveWinBounds,
                             screenshotWidth = snapshot.width,
                             screenshotHeight = snapshot.height,
+                            displayWidth = effectiveDispW,
+                            displayHeight = effectiveDispH,
                             selectionInUi = selectedRegion ?: android.graphics.Rect(),
                             normalizedSelection = normSelection ?: android.graphics.Rect(),
                             convertedCropRect = cropRect,
-                            croppedBitmapWidth = 0,
-                            croppedBitmapHeight = 0,
+                            cropWidth = (cropRect.right - cropRect.left).coerceAtLeast(0),
+                            cropHeight = (cropRect.bottom - cropRect.top).coerceAtLeast(0),
+                            ocrInputWidth = 0,
+                            ocrInputHeight = 0,
+                            ocrBlockCount = 0,
+                            ocrLineCount = 0,
+                            ocrElementCount = 0,
                             scaleX = scaleX,
                             scaleY = scaleY,
                             densityDpi = snapshot.density,
                             ocrUpscaleFactor = 1f,
                             ocrTextLength = 0,
                             ocrSentenceCount = 0,
+                            acquisitionResultType = if (isOutside) "CropOutsideScreenshot" else "SelectedAreaTooSmall",
                             errorReason = "CropInvalid: ${(cropRect.right - cropRect.left)}x${(cropRect.bottom - cropRect.top)}"
                         )
                     )
-                    return@withContext CrossAppOcrAcquisitionResult.SelectedAreaTooSmall(
-                        cropRect.right - cropRect.left,
-                        cropRect.bottom - cropRect.top
-                    )
+                    return@withContext if (isOutside) {
+                        CrossAppOcrAcquisitionResult.CropOutsideScreenshot("${cropRect.width()}x${cropRect.height()} at (${cropRect.left},${cropRect.top})")
+                    } else {
+                        CrossAppOcrAcquisitionResult.SelectedAreaTooSmall(
+                            cropRect.right - cropRect.left,
+                            cropRect.bottom - cropRect.top
+                        )
+                    }
                 }
 
                 var croppedBitmap: android.graphics.Bitmap? = null
@@ -240,17 +312,20 @@ object CrossAppOcrCoordinator {
                         snapshot.bitmap
                     }
 
-                    // OCR Input Quality Check (Phase 9P Section 9):
+                    // Update DEBUG-only in-memory capture inspector
+                    DebugOcrCaptureInspector.updateCaptures(snapshot.bitmap, rawCrop)
+
+                    // OCR Input Quality Check (Phase 9R Section 9):
                     // If the cropped area has small height (< 48px), upscale 2x with bilinear filtering
                     // to bring character size into ML Kit's optimal recognition threshold (~16px+).
-                    val shouldUpscale = rawCrop.height < 48 || (rawCrop.width < 64 && rawCrop.height < 64)
-                    val ocrUpscaleFactor = if (shouldUpscale && rawCrop.width <= 1024 && rawCrop.height <= 1024) {
+                    val shouldUpscale = (rawCrop.height in 1..47) || (rawCrop.width in 1..63 && rawCrop.height in 1..63)
+                    val ocrUpscaleFactor = if (shouldUpscale && rawCrop.width in 1..1024 && rawCrop.height in 1..1024) {
                         2.0f
                     } else {
                         1.0f
                     }
 
-                    val bitmapToProcess = if (ocrUpscaleFactor > 1.0f) {
+                    val bitmapToProcess = if (ocrUpscaleFactor > 1.0f && rawCrop.width > 0 && rawCrop.height > 0) {
                         scaledBitmap = android.graphics.Bitmap.createScaledBitmap(
                             rawCrop,
                             (rawCrop.width * ocrUpscaleFactor).toInt(),
@@ -264,33 +339,86 @@ object CrossAppOcrCoordinator {
 
                     val ocrResult = ocrEngine.recognize(bitmapToProcess)
 
-                    // Record comprehensive diagnostics in-memory
-                    ScreenOcrDiagnostics.record(
-                        ScreenOcrDiagnosticRecord(
-                            targetPackageName = target.packageName,
-                            windowId = target.windowId,
-                            windowBounds = effectiveWinBounds,
-                            screenshotWidth = snapshot.width,
-                            screenshotHeight = snapshot.height,
-                            selectionInUi = selectedRegion ?: android.graphics.Rect(),
-                            normalizedSelection = normSelection ?: android.graphics.Rect(),
-                            convertedCropRect = cropRect,
-                            croppedBitmapWidth = rawCrop.width,
-                            croppedBitmapHeight = rawCrop.height,
-                            scaleX = scaleX,
-                            scaleY = scaleY,
-                            densityDpi = snapshot.density,
-                            ocrUpscaleFactor = ocrUpscaleFactor,
-                            ocrTextLength = ocrResult.text.length,
-                            ocrSentenceCount = ocrResult.sentences.size,
-                            errorReason = if (!ocrResult.hasText) ocrResult.errorMessage ?: "NoTextRecognized" else null
-                        )
-                    )
+                    // Handle OCR provider unavailability
+                    if (ocrResult.errorMessage != null) {
+                        val errMsg = ocrResult.errorMessage
+                        val isUnavailable = errMsg.contains("unavailable", ignoreCase = true) ||
+                                errMsg.contains("download", ignoreCase = true) ||
+                                errMsg.contains("uninitialized", ignoreCase = true)
 
-                    if (!ocrResult.hasText || ocrResult.text.isBlank()) {
-                        return@withContext CrossAppOcrAcquisitionResult.NoTextRecognized
+                        val resultType = if (isUnavailable) "OcrProviderUnavailable" else if (!ocrResult.hasText) "OcrReturnedEmpty" else "Error"
+                        ScreenOcrDiagnostics.record(
+                            ScreenOcrDiagnosticRecord(
+                                targetPackageName = target.packageName,
+                                targetWindowId = target.windowId,
+                                windowBounds = effectiveWinBounds,
+                                screenshotWidth = snapshot.width,
+                                screenshotHeight = snapshot.height,
+                                displayWidth = effectiveDispW,
+                                displayHeight = effectiveDispH,
+                                selectionInUi = selectedRegion ?: android.graphics.Rect(),
+                                normalizedSelection = normSelection ?: android.graphics.Rect(),
+                                convertedCropRect = cropRect,
+                                cropWidth = rawCrop.width,
+                                cropHeight = rawCrop.height,
+                                ocrInputWidth = bitmapToProcess.width,
+                                ocrInputHeight = bitmapToProcess.height,
+                                ocrBlockCount = ocrResult.blocks.size,
+                                ocrLineCount = ocrResult.lines.size,
+                                ocrElementCount = ocrResult.lines.sumOf { it.elements.size },
+                                scaleX = scaleX,
+                                scaleY = scaleY,
+                                densityDpi = snapshot.density,
+                                ocrUpscaleFactor = ocrUpscaleFactor,
+                                ocrTextLength = ocrResult.text.length,
+                                ocrSentenceCount = ocrResult.sentences.size,
+                                acquisitionResultType = resultType,
+                                errorReason = errMsg
+                            )
+                        )
+
+                        if (isUnavailable) {
+                            return@withContext CrossAppOcrAcquisitionResult.OcrProviderUnavailable(errMsg)
+                        } else if (!ocrResult.hasText) {
+                            return@withContext CrossAppOcrAcquisitionResult.OcrReturnedEmpty
+                        }
                     }
 
+                    // Check for empty recognition
+                    if (!ocrResult.hasText || ocrResult.text.isBlank()) {
+                        ScreenOcrDiagnostics.record(
+                            ScreenOcrDiagnosticRecord(
+                                targetPackageName = target.packageName,
+                                targetWindowId = target.windowId,
+                                windowBounds = effectiveWinBounds,
+                                screenshotWidth = snapshot.width,
+                                screenshotHeight = snapshot.height,
+                                displayWidth = effectiveDispW,
+                                displayHeight = effectiveDispH,
+                                selectionInUi = selectedRegion ?: android.graphics.Rect(),
+                                normalizedSelection = normSelection ?: android.graphics.Rect(),
+                                convertedCropRect = cropRect,
+                                cropWidth = rawCrop.width,
+                                cropHeight = rawCrop.height,
+                                ocrInputWidth = bitmapToProcess.width,
+                                ocrInputHeight = bitmapToProcess.height,
+                                ocrBlockCount = ocrResult.blocks.size,
+                                ocrLineCount = ocrResult.lines.size,
+                                ocrElementCount = ocrResult.lines.sumOf { it.elements.size },
+                                scaleX = scaleX,
+                                scaleY = scaleY,
+                                densityDpi = snapshot.density,
+                                ocrUpscaleFactor = ocrUpscaleFactor,
+                                ocrTextLength = 0,
+                                ocrSentenceCount = 0,
+                                acquisitionResultType = "OcrReturnedEmpty",
+                                errorReason = "OcrReturnedEmpty"
+                            )
+                        )
+                        return@withContext CrossAppOcrAcquisitionResult.OcrReturnedEmpty
+                    }
+
+                    // Map sentence geometries back to screen display coordinates using originMode
                     val mappedSentences = ocrResult.sentences.map {
                         ScreenGeometryMapper.mapSentenceGeometryToScreen(
                             sentence = it,
@@ -299,7 +427,8 @@ object CrossAppOcrCoordinator {
                             scaleY = scaleY,
                             windowLeft = effectiveWinBounds.left.toFloat(),
                             windowTop = effectiveWinBounds.top.toFloat(),
-                            ocrUpscaleFactor = ocrUpscaleFactor
+                            ocrUpscaleFactor = ocrUpscaleFactor,
+                            originMode = originMode
                         )
                     }
 
@@ -311,8 +440,68 @@ object CrossAppOcrCoordinator {
                     )
 
                     if (document.sections.isEmpty() || document.allSegments().isEmpty()) {
-                        return@withContext CrossAppOcrAcquisitionResult.NoTextRecognized
+                        ScreenOcrDiagnostics.record(
+                            ScreenOcrDiagnosticRecord(
+                                targetPackageName = target.packageName,
+                                targetWindowId = target.windowId,
+                                windowBounds = effectiveWinBounds,
+                                screenshotWidth = snapshot.width,
+                                screenshotHeight = snapshot.height,
+                                displayWidth = effectiveDispW,
+                                displayHeight = effectiveDispH,
+                                selectionInUi = selectedRegion ?: android.graphics.Rect(),
+                                normalizedSelection = normSelection ?: android.graphics.Rect(),
+                                convertedCropRect = cropRect,
+                                cropWidth = rawCrop.width,
+                                cropHeight = rawCrop.height,
+                                ocrInputWidth = bitmapToProcess.width,
+                                ocrInputHeight = bitmapToProcess.height,
+                                ocrBlockCount = ocrResult.blocks.size,
+                                ocrLineCount = ocrResult.lines.size,
+                                ocrElementCount = ocrResult.lines.sumOf { it.elements.size },
+                                scaleX = scaleX,
+                                scaleY = scaleY,
+                                densityDpi = snapshot.density,
+                                ocrUpscaleFactor = ocrUpscaleFactor,
+                                ocrTextLength = ocrResult.text.length,
+                                ocrSentenceCount = 0,
+                                acquisitionResultType = "TextSegmentationEmpty",
+                                errorReason = "TextSegmentationEmpty"
+                            )
+                        )
+                        return@withContext CrossAppOcrAcquisitionResult.TextSegmentationEmpty
                     }
+
+                    // Record comprehensive diagnostics in-memory for success
+                    ScreenOcrDiagnostics.record(
+                        ScreenOcrDiagnosticRecord(
+                            targetPackageName = target.packageName,
+                            targetWindowId = target.windowId,
+                            windowBounds = effectiveWinBounds,
+                            screenshotWidth = snapshot.width,
+                            screenshotHeight = snapshot.height,
+                            displayWidth = effectiveDispW,
+                            displayHeight = effectiveDispH,
+                            selectionInUi = selectedRegion ?: android.graphics.Rect(),
+                            normalizedSelection = normSelection ?: android.graphics.Rect(),
+                            convertedCropRect = cropRect,
+                            cropWidth = rawCrop.width,
+                            cropHeight = rawCrop.height,
+                            ocrInputWidth = bitmapToProcess.width,
+                            ocrInputHeight = bitmapToProcess.height,
+                            ocrBlockCount = ocrResult.blocks.size,
+                            ocrLineCount = ocrResult.lines.size,
+                            ocrElementCount = ocrResult.lines.sumOf { it.elements.size },
+                            scaleX = scaleX,
+                            scaleY = scaleY,
+                            densityDpi = snapshot.density,
+                            ocrUpscaleFactor = ocrUpscaleFactor,
+                            ocrTextLength = ocrResult.text.length,
+                            ocrSentenceCount = ocrResult.sentences.size,
+                            acquisitionResultType = "Success",
+                            errorReason = null
+                        )
+                    )
 
                     CrossAppOcrAcquisitionResult.Success(
                         document = document,

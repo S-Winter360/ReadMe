@@ -1,7 +1,9 @@
 package com.readme.app.accessibility
 
+import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
+import com.readme.app.BuildConfig
 
 /**
  * In-memory diagnostic record capturing the state of the screen OCR acquisition pipeline.
@@ -12,23 +14,76 @@ import android.util.Log
 data class ScreenOcrDiagnosticRecord(
     val timestamp: Long = System.currentTimeMillis(),
     val targetPackageName: String,
-    val windowId: Int,
+    val targetWindowId: Int,
     val windowBounds: Rect,
     val screenshotWidth: Int,
     val screenshotHeight: Int,
+    val displayWidth: Int = 0,
+    val displayHeight: Int = 0,
+    val densityDpi: Int,
     val selectionInUi: Rect,
     val normalizedSelection: Rect,
     val convertedCropRect: Rect,
-    val croppedBitmapWidth: Int,
-    val croppedBitmapHeight: Int,
+    val cropWidth: Int = convertedCropRect.width(),
+    val cropHeight: Int = convertedCropRect.height(),
+    val ocrInputWidth: Int = 0,
+    val ocrInputHeight: Int = 0,
+    val ocrBlockCount: Int = 0,
+    val ocrLineCount: Int = 0,
+    val ocrElementCount: Int = 0,
     val scaleX: Float,
     val scaleY: Float,
-    val densityDpi: Int,
     val ocrUpscaleFactor: Float,
     val ocrTextLength: Int,
     val ocrSentenceCount: Int,
+    val acquisitionResultType: String = "Unknown",
     val errorReason: String? = null
 )
+
+/**
+ * Temporary in-memory inspector for raw screenshot and cropped bitmap during DEBUG mode.
+ * Bitmaps are strictly held in-memory and only when BuildConfig.DEBUG is true.
+ * In release builds, no bitmaps are retained or captured.
+ */
+object DebugOcrCaptureInspector {
+    @Volatile
+    var lastRawScreenshot: Bitmap? = null
+        private set
+
+    @Volatile
+    var lastCroppedBitmap: Bitmap? = null
+        private set
+
+    @Synchronized
+    fun updateCaptures(raw: Bitmap?, crop: Bitmap?) {
+        if (!BuildConfig.DEBUG) return
+        try { lastRawScreenshot?.recycle() } catch (_: Throwable) {}
+        try { lastCroppedBitmap?.recycle() } catch (_: Throwable) {}
+
+        lastRawScreenshot = raw?.let {
+            try {
+                it.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        lastCroppedBitmap = crop?.let {
+            try {
+                it.copy(Bitmap.Config.ARGB_8888, false)
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
+    @Synchronized
+    fun clear() {
+        try { lastRawScreenshot?.recycle() } catch (_: Throwable) {}
+        try { lastCroppedBitmap?.recycle() } catch (_: Throwable) {}
+        lastRawScreenshot = null
+        lastCroppedBitmap = null
+    }
+}
 
 /**
  * Thread-safe in-memory diagnostics registry for Screen OCR pipeline auditing.
@@ -53,13 +108,16 @@ object ScreenOcrDiagnostics {
         try {
             Log.d(
                 TAG,
-                "Target: ${record.targetPackageName} (winId=${record.windowId}, bounds=${record.windowBounds}), " +
+                "Target: ${record.targetPackageName} (winId=${record.targetWindowId}, bounds=${record.windowBounds}), " +
+                    "Display: ${record.displayWidth}x${record.displayHeight}, " +
                     "Screenshot: ${record.screenshotWidth}x${record.screenshotHeight}, " +
                     "SelectionUI: ${record.selectionInUi} -> Norm: ${record.normalizedSelection}, " +
-                    "Crop: ${record.convertedCropRect} (${record.croppedBitmapWidth}x${record.croppedBitmapHeight}), " +
+                    "Crop: ${record.convertedCropRect} (${record.cropWidth}x${record.cropHeight}), " +
+                    "OCR Input: ${record.ocrInputWidth}x${record.ocrInputHeight} (scale=${record.ocrUpscaleFactor}), " +
                     "Scale: (${record.scaleX}, ${record.scaleY}), Density: ${record.densityDpi}, " +
-                    "UpscaleFactor: ${record.ocrUpscaleFactor}, " +
+                    "OCR Blocks: ${record.ocrBlockCount}, Lines: ${record.ocrLineCount}, Elements: ${record.ocrElementCount}, " +
                     "OCR TextLen: ${record.ocrTextLength}, Sentences: ${record.ocrSentenceCount}, " +
+                    "Result: ${record.acquisitionResultType}, " +
                     "Error: ${record.errorReason ?: "None"}"
             )
         } catch (_: Throwable) {
@@ -76,5 +134,6 @@ object ScreenOcrDiagnostics {
     fun clear() {
         lastDiagnostic = null
         history.clear()
+        DebugOcrCaptureInspector.clear()
     }
 }

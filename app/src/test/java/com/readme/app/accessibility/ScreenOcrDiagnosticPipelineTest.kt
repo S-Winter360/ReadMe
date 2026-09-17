@@ -137,21 +137,29 @@ class ScreenOcrDiagnosticPipelineTest {
     fun `ScreenOcrDiagnostics records and manages diagnostic traces`() {
         val record = ScreenOcrDiagnosticRecord(
             targetPackageName = "com.sample.app",
-            windowId = 42,
+            targetWindowId = 42,
             windowBounds = ScreenGeometryMapper.makeRect(0, 0, 1080, 2400),
+            displayWidth = 1080,
+            displayHeight = 2400,
             screenshotWidth = 1080,
             screenshotHeight = 2400,
             selectionInUi = ScreenGeometryMapper.makeRect(100, 200, 500, 600),
             normalizedSelection = ScreenGeometryMapper.makeRect(100, 200, 500, 600),
             convertedCropRect = ScreenGeometryMapper.makeRect(100, 200, 500, 600),
-            croppedBitmapWidth = 400,
-            croppedBitmapHeight = 400,
+            cropWidth = 400,
+            cropHeight = 400,
             scaleX = 1f,
             scaleY = 1f,
             densityDpi = 480,
+            ocrInputWidth = 400,
+            ocrInputHeight = 400,
             ocrUpscaleFactor = 1f,
+            ocrBlockCount = 1,
+            ocrLineCount = 2,
+            ocrElementCount = 6,
             ocrTextLength = 25,
             ocrSentenceCount = 2,
+            acquisitionResultType = "Success",
             errorReason = null
         )
 
@@ -159,7 +167,7 @@ class ScreenOcrDiagnosticPipelineTest {
         val records = ScreenOcrDiagnostics.getRecentRecords()
         assertEquals(1, records.size)
         assertEquals("com.sample.app", records[0].targetPackageName)
-        assertEquals(42, records[0].windowId)
+        assertEquals(42, records[0].targetWindowId)
         assertEquals(25, records[0].ocrTextLength)
 
         ScreenOcrDiagnostics.clear()

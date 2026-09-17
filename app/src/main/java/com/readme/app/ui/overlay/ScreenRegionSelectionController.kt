@@ -147,12 +147,13 @@ class ScreenRegionSelectionController(private val context: Context) {
 
         // Top Header Chip
         val header = TextView(context).apply {
-            text = "Drag or resize to select text to read"
+            text = "Select the area to read"
             setTextColor(Color.WHITE)
             textSize = 15f
             setPadding(32, 16, 32, 16)
             setBackgroundColor(Color.parseColor("#D91E1E1E"))
             gravity = Gravity.CENTER
+            contentDescription = "Select the area to read"
         }
         val headerParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -175,6 +176,8 @@ class ScreenRegionSelectionController(private val context: Context) {
             text = "Cancel"
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#333333"))
+            minHeight = (48 * dm.density).toInt()
+            contentDescription = "Cancel selection"
             setOnClickListener {
                 dismiss()
                 onCancelled()
@@ -187,6 +190,8 @@ class ScreenRegionSelectionController(private val context: Context) {
             text = "Read"
             setTextColor(Color.parseColor("#121212"))
             setBackgroundColor(Color.parseColor("#00B4D8"))
+            minHeight = (48 * dm.density).toInt()
+            contentDescription = "Confirm selection and read"
             setOnClickListener {
                 val clamped = ScreenGeometryMapper.clampRegion(currentRect, effectiveBounds)
                 dismiss()

@@ -85,8 +85,23 @@ class ReadMeReadingSessionRuntime(
     private val _appForegroundState = MutableStateFlow(false)
     val appForegroundState: StateFlow<Boolean> = _appForegroundState.asStateFlow()
 
+    private val _isBubbleClosedByUser = MutableStateFlow(false)
+    val isBubbleClosedByUser: StateFlow<Boolean> = _isBubbleClosedByUser.asStateFlow()
+
     fun setAppForeground(isForeground: Boolean) {
         _appForegroundState.value = isForeground
+        if (!isForeground) {
+            // When the user leaves ReadMe again: the system bubble becomes available (Section 20)
+            _isBubbleClosedByUser.value = false
+        }
+    }
+
+    fun closeBubbleByUser() {
+        _isBubbleClosedByUser.value = true
+    }
+
+    fun reopenBubble() {
+        _isBubbleClosedByUser.value = false
     }
 
     private var activeSessionId: Long = 0L
@@ -272,6 +287,21 @@ class ReadMeReadingSessionRuntime(
             notifyStarted()
         }
         return segmentToSpeak
+    }
+
+    /**
+     * Pauses the reading session and halts speech synthesis.
+     * Preserves current document, position, and highlight according to pause behaviour.
+     */
+    fun pauseReading() {
+        stopReading()
+    }
+
+    /**
+     * Resumes reading from the existing ReadingPosition without restarting from the first sentence.
+     */
+    fun resumeReading(): ReadingSegment? {
+        return startReading()
     }
 
     /**

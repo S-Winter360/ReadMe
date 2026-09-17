@@ -28,6 +28,8 @@ class ReadMeSettingsRepository(private val context: Context) {
         val SPEECH_SPEED = floatPreferencesKey("speech_speed")
         val SPEECH_PITCH = floatPreferencesKey("speech_pitch")
         val SYSTEM_BUBBLE_ENABLED = booleanPreferencesKey("system_bubble_enabled")
+        val FLOATING_README_ENABLED = booleanPreferencesKey("floating_readme_enabled")
+        val CROSS_APP_READING_ENABLED = booleanPreferencesKey("cross_app_reading_enabled")
         val SCREEN_OCR_CONSENT_GRANTED = booleanPreferencesKey("screen_ocr_consent_granted")
     }
 
@@ -44,7 +46,10 @@ class ReadMeSettingsRepository(private val context: Context) {
             val volume = preferences[PreferencesKeys.SPEECH_VOLUME] ?: 0.70f
             val speed = preferences[PreferencesKeys.SPEECH_SPEED] ?: 1.0f
             val pitch = preferences[PreferencesKeys.SPEECH_PITCH] ?: 0.50f
-            val isBubbleEnabled = preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED] ?: false
+            val isFloatingEnabled = preferences[PreferencesKeys.FLOATING_README_ENABLED]
+                ?: preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED]
+                ?: false
+            val isCrossAppEnabled = preferences[PreferencesKeys.CROSS_APP_READING_ENABLED] ?: false
             val isOcrConsentGranted = preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] ?: false
 
             // Validate/clamp numeric values
@@ -57,7 +62,9 @@ class ReadMeSettingsRepository(private val context: Context) {
                 speechVolume = clampedVolume,
                 speechSpeed = clampedSpeed,
                 speechPitch = clampedPitch,
-                isSystemBubbleEnabled = isBubbleEnabled,
+                isSystemBubbleEnabled = isFloatingEnabled,
+                isFloatingReadmeEnabled = isFloatingEnabled,
+                isCrossAppReadingEnabled = isCrossAppEnabled,
                 isScreenOcrConsentGranted = isOcrConsentGranted
             )
         }
@@ -90,8 +97,19 @@ class ReadMeSettingsRepository(private val context: Context) {
     }
 
     suspend fun updateSystemBubbleEnabled(enabled: Boolean) {
+        updateFloatingReadmeEnabled(enabled)
+    }
+
+    suspend fun updateFloatingReadmeEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.FLOATING_README_ENABLED] = enabled
             preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateCrossAppReadingEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.CROSS_APP_READING_ENABLED] = enabled
         }
     }
 

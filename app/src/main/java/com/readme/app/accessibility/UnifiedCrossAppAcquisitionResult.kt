@@ -11,6 +11,7 @@ sealed class UnifiedCrossAppAcquisitionResult {
     ) : UnifiedCrossAppAcquisitionResult()
 
     // Distinct controlled error states instead of raw exceptions
+    object FeatureDisabled : UnifiedCrossAppAcquisitionResult()
     object ServiceUnavailable : UnifiedCrossAppAcquisitionResult()
     object ApiNotSupported : UnifiedCrossAppAcquisitionResult()
     object ReadMeSelfIgnored : UnifiedCrossAppAcquisitionResult()
@@ -19,6 +20,10 @@ sealed class UnifiedCrossAppAcquisitionResult {
     object SensitiveContentBlocked : UnifiedCrossAppAcquisitionResult()
     object RateLimited : UnifiedCrossAppAcquisitionResult()
     object NoTextAvailable : UnifiedCrossAppAcquisitionResult()
+    object OcrReturnedEmpty : UnifiedCrossAppAcquisitionResult()
+    object TextSegmentationEmpty : UnifiedCrossAppAcquisitionResult()
+    data class OcrProviderUnavailable(val details: String) : UnifiedCrossAppAcquisitionResult()
+    data class CropOutsideScreenshot(val details: String) : UnifiedCrossAppAcquisitionResult()
     data class SelectedAreaTooSmall(val width: Int, val height: Int) : UnifiedCrossAppAcquisitionResult()
     object SelectedAreaOutsideWindow : UnifiedCrossAppAcquisitionResult()
     data class CaptureUnavailable(val details: String) : UnifiedCrossAppAcquisitionResult()

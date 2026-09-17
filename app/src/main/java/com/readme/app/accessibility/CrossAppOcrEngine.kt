@@ -1,6 +1,10 @@
 package com.readme.app.accessibility
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import androidx.pdf.ExperimentalPdfApi
 import androidx.pdf.ocr.playservices.MlKitOcrProvider
@@ -13,11 +17,20 @@ import java.io.Closeable
 import kotlin.coroutines.coroutineContext
 
 /**
+ * Geometry-aware model representing an individual recognized word or element.
+ */
+data class CrossAppOcrElement(
+    val text: String,
+    val bounds: RectF
+)
+
+/**
  * Geometry-aware model representing an individual recognized line.
  */
 data class CrossAppOcrLine(
     val text: String,
-    val bounds: RectF
+    val bounds: RectF,
+    val elements: List<CrossAppOcrElement> = emptyList()
 )
 
 /**
@@ -52,12 +65,92 @@ data class CrossAppOcrResult(
 )
 
 /**
+ * Result of the OCR engine isolation test using a known in-memory test bitmap.
+ */
+sealed interface OcrIsolationTestResult {
+    data class Passed(
+        val recognizedText: String,
+        val blockCount: Int,
+        val lineCount: Int,
+        val durationMs: Long
+    ) : OcrIsolationTestResult
+
+    data class Failed(
+        val reason: String,
+        val exception: Throwable? = null
+    ) : OcrIsolationTestResult
+}
+
+/**
  * Clean OCR provider abstraction for cross-app image text recognition.
  * Separates ML Kit / AndroidX implementation details from document parsing and coordinators.
  */
 interface CrossAppOcrEngine : Closeable {
     suspend fun recognize(bitmap: Bitmap): CrossAppOcrResult
     override fun close() {}
+}
+
+/**
+ * Utility to verify ML Kit OCR health in isolation using a synthetic, high-contrast test image.
+ */
+object OcrIsolationTester {
+    fun createTestBitmap(text: String = "ReadMe Test"): Bitmap {
+        val width = 480
+        val height = 160
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.WHITE)
+
+        val paint = Paint().apply {
+            color = Color.BLACK
+            textSize = 44f
+            isAntiAlias = true
+            isFakeBoldText = true
+            textAlign = Paint.Align.CENTER
+        }
+        val yPos = (height / 2f) - ((paint.descent() + paint.ascent()) / 2f)
+        canvas.drawText(text, width / 2f, yPos, paint)
+        return bitmap
+    }
+
+    suspend fun runIsolationTest(
+        engine: CrossAppOcrEngine,
+        expectedKeyword: String = "ReadMe"
+    ): OcrIsolationTestResult = withContext(Dispatchers.Default) {
+        val testBitmap = createTestBitmap("ReadMe Test")
+        val start = System.currentTimeMillis()
+        try {
+            val result = engine.recognize(testBitmap)
+            val duration = System.currentTimeMillis() - start
+            if (result.hasText && result.text.contains(expectedKeyword, ignoreCase = true)) {
+                OcrIsolationTestResult.Passed(
+                    recognizedText = result.text.trim(),
+                    blockCount = result.blocks.size,
+                    lineCount = result.lines.size,
+                    durationMs = duration
+                )
+            } else if (!result.hasText) {
+                OcrIsolationTestResult.Failed(
+                    reason = result.errorMessage ?: "ML Kit returned no text on known test image",
+                    exception = null
+                )
+            } else {
+                OcrIsolationTestResult.Failed(
+                    reason = "Expected text containing '$expectedKeyword', but got '${result.text.trim()}'",
+                    exception = null
+                )
+            }
+        } catch (e: Throwable) {
+            OcrIsolationTestResult.Failed(
+                reason = e.message ?: e.javaClass.simpleName,
+                exception = e
+            )
+        } finally {
+            try {
+                testBitmap.recycle()
+            } catch (_: Throwable) {}
+        }
+    }
 }
 
 /**
@@ -87,51 +180,124 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
             val rawText = allOcrText?.text ?: ""
             val normalized = PdfOcrTextNormalizer.normalize(rawText)
 
+            val (blocksList, linesList) = extractHierarchyReflectively(result, bitmap.width, bitmap.height)
+
             val sentencesList = mutableListOf<CrossAppOcrSentence>()
             if (normalized.isNotBlank()) {
                 val sentences = TxtDocumentParser.splitIntoSentences(normalized)
-                for (s in sentences) {
-                    val trimmed = s.trim()
-                    if (trimmed.isNotBlank()) {
-                        val searchMatches = try {
-                            result?.getSearchBounds(trimmed, false)
-                        } catch (_: Throwable) {
-                            null
-                        }
-                        var matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
 
-                        // Fallback: If normalized sentence didn't match directly, search by non-trivial words
-                        if (matchRects.isEmpty() && trimmed.length > 5) {
-                            val words = trimmed.split(Regex("\\s+")).filter { it.length >= 3 }
-                            val wordRects = mutableListOf<RectF>()
-                            for (w in words.take(6)) {
-                                try {
-                                    val wb = result?.getSearchBounds(w, false)
-                                    val r = wb?.firstOrNull()?.map { RectF(it) }
-                                    if (!r.isNullOrEmpty()) {
-                                        wordRects.addAll(r)
-                                    }
-                                } catch (_: Throwable) {}
+                if (linesList.isNotEmpty()) {
+                    // Geometry mapping: assign OCR lines and word elements directly to sentences
+                    var currentLineIdx = 0
+                    for (s in sentences) {
+                        val trimmed = s.trim()
+                        if (trimmed.isBlank()) continue
+
+                        val sentenceWords = trimmed.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+                        val sentenceLineRects = mutableListOf<RectF>()
+                        var matchedWordsCount = 0
+
+                        val scanStartLine = currentLineIdx
+                        var lineIdx = scanStartLine
+                        while (lineIdx < linesList.size && matchedWordsCount < sentenceWords.size) {
+                            val line = linesList[lineIdx]
+                            val lineWords = line.text.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+
+                            // Check if line contains words belonging to this sentence
+                            val matchingInThisLine = lineWords.count { word ->
+                                sentenceWords.any { it.contains(word) || word.contains(it) }
                             }
-                            if (wordRects.isNotEmpty()) {
-                                matchRects = wordRects
+
+                            if (matchingInThisLine > 0) {
+                                sentenceLineRects.add(line.bounds)
+                                matchedWordsCount += matchingInThisLine
+                                currentLineIdx = lineIdx
+                            } else if (sentenceLineRects.isNotEmpty()) {
+                                // We already started matching lines for this sentence, but this line has none: stop
+                                break
                             }
+                            lineIdx++
                         }
 
-                        val unionBounds = if (matchRects.isNotEmpty()) {
-                            val union = RectF(matchRects.first())
-                            matchRects.forEach { union.union(it) }
-                            union
-                        } else {
-                            RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
-                        }
-                        sentencesList.add(
-                            CrossAppOcrSentence(
-                                text = trimmed,
-                                bounds = unionBounds,
-                                lineBounds = matchRects
+                        // If line matching yielded results, use them; otherwise fallback to search bounds
+                        if (sentenceLineRects.isNotEmpty()) {
+                            val unionBounds = RectF(sentenceLineRects.first())
+                            sentenceLineRects.forEach { unionBounds.union(it) }
+                            sentencesList.add(
+                                CrossAppOcrSentence(
+                                    text = trimmed,
+                                    bounds = unionBounds,
+                                    lineBounds = sentenceLineRects
+                                )
                             )
-                        )
+                        } else {
+                            // Fallback to getSearchBounds
+                            val searchMatches = try {
+                                result?.getSearchBounds(trimmed, false)
+                            } catch (_: Throwable) {
+                                null
+                            }
+                            val matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
+                            val unionBounds = if (matchRects.isNotEmpty()) {
+                                val union = RectF(matchRects.first())
+                                matchRects.forEach { union.union(it) }
+                                union
+                            } else {
+                                RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+                            }
+                            sentencesList.add(
+                                CrossAppOcrSentence(
+                                    text = trimmed,
+                                    bounds = unionBounds,
+                                    lineBounds = matchRects.ifEmpty { listOf(unionBounds) }
+                                )
+                            )
+                        }
+                    }
+                } else {
+                    // Fallback when ML Kit Text field is not accessible
+                    for (s in sentences) {
+                        val trimmed = s.trim()
+                        if (trimmed.isNotBlank()) {
+                            val searchMatches = try {
+                                result?.getSearchBounds(trimmed, false)
+                            } catch (_: Throwable) {
+                                null
+                            }
+                            var matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
+
+                            if (matchRects.isEmpty() && trimmed.length > 5) {
+                                val words = trimmed.split(Regex("\\s+")).filter { it.length >= 3 }
+                                val wordRects = mutableListOf<RectF>()
+                                for (w in words.take(6)) {
+                                    try {
+                                        val wb = result?.getSearchBounds(w, false)
+                                        val r = wb?.firstOrNull()?.map { RectF(it) }
+                                        if (!r.isNullOrEmpty()) {
+                                            wordRects.addAll(r)
+                                        }
+                                    } catch (_: Throwable) {}
+                                }
+                                if (wordRects.isNotEmpty()) {
+                                    matchRects = wordRects
+                                }
+                            }
+
+                            val unionBounds = if (matchRects.isNotEmpty()) {
+                                val union = RectF(matchRects.first())
+                                matchRects.forEach { union.union(it) }
+                                union
+                            } else {
+                                RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
+                            }
+                            sentencesList.add(
+                                CrossAppOcrSentence(
+                                    text = trimmed,
+                                    bounds = unionBounds,
+                                    lineBounds = matchRects
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -139,6 +305,8 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
             CrossAppOcrResult(
                 text = normalized,
                 hasText = normalized.isNotBlank(),
+                blocks = blocksList,
+                lines = linesList,
                 sentences = sentencesList,
                 confidenceOrNull = null
             )
@@ -151,6 +319,100 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
                 confidenceOrNull = null,
                 errorMessage = e.message ?: e.javaClass.simpleName
             )
+        }
+    }
+
+    private fun extractHierarchyReflectively(
+        result: Any?,
+        bitmapWidth: Int,
+        bitmapHeight: Int
+    ): Pair<List<CrossAppOcrBlock>, List<CrossAppOcrLine>> {
+        val blocksList = mutableListOf<CrossAppOcrBlock>()
+        val linesList = mutableListOf<CrossAppOcrLine>()
+        if (result == null) return Pair(blocksList, linesList)
+
+        try {
+            val textObj = try {
+                val field = result.javaClass.getDeclaredField("text")
+                field.isAccessible = true
+                field.get(result)
+            } catch (_: Throwable) {
+                try {
+                    val method = result.javaClass.getMethod("getText")
+                    method.invoke(result)
+                } catch (_: Throwable) {
+                    null
+                }
+            } ?: result
+
+            val getBlocksMethod = try {
+                textObj.javaClass.getMethod("getTextBlocks")
+            } catch (_: Throwable) {
+                null
+            }
+
+            if (getBlocksMethod != null) {
+                val textBlocks = getBlocksMethod.invoke(textObj) as? Iterable<*>
+                if (textBlocks != null) {
+                    for (block in textBlocks) {
+                        if (block == null) continue
+                        val blockText = invokeStringMethod(block, "getText") ?: ""
+                        val blockBounds = invokeRectMethod(block, "getBoundingBox") ?: Rect(0, 0, bitmapWidth, bitmapHeight)
+                        val blockRect = RectF(blockBounds)
+                        val blkLines = mutableListOf<CrossAppOcrLine>()
+
+                        val getLinesMethod = try { block.javaClass.getMethod("getLines") } catch (_: Throwable) { null }
+                        val lines = getLinesMethod?.invoke(block) as? Iterable<*>
+                        if (lines != null) {
+                            for (line in lines) {
+                                if (line == null) continue
+                                val lineText = invokeStringMethod(line, "getText") ?: ""
+                                val lineBounds = invokeRectMethod(line, "getBoundingBox") ?: blockBounds
+                                val lineRect = RectF(lineBounds)
+                                val elements = mutableListOf<CrossAppOcrElement>()
+
+                                val getElemsMethod = try { line.javaClass.getMethod("getElements") } catch (_: Throwable) { null }
+                                val elems = getElemsMethod?.invoke(line) as? Iterable<*>
+                                if (elems != null) {
+                                    for (elem in elems) {
+                                        if (elem == null) continue
+                                        val elemText = invokeStringMethod(elem, "getText") ?: ""
+                                        val elemBounds = invokeRectMethod(elem, "getBoundingBox") ?: lineBounds
+                                        elements.add(CrossAppOcrElement(elemText, RectF(elemBounds)))
+                                    }
+                                }
+
+                                val ocrLine = CrossAppOcrLine(lineText, lineRect, elements)
+                                blkLines.add(ocrLine)
+                                linesList.add(ocrLine)
+                            }
+                        }
+                        blocksList.add(CrossAppOcrBlock(blockText, blockRect, blkLines))
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            // Safe fallback
+        }
+
+        return Pair(blocksList, linesList)
+    }
+
+    private fun invokeStringMethod(target: Any, methodName: String): String? {
+        return try {
+            val m = target.javaClass.getMethod(methodName)
+            m.invoke(target) as? String
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun invokeRectMethod(target: Any, methodName: String): Rect? {
+        return try {
+            val m = target.javaClass.getMethod(methodName)
+            m.invoke(target) as? Rect
+        } catch (_: Throwable) {
+            null
         }
     }
 

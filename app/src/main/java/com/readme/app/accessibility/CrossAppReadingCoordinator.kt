@@ -21,7 +21,9 @@ object CrossAppReadingCoordinator {
         request: CrossAppAcquisitionRequest? = null,
         target: CrossAppWindowTarget? = null,
         appLabel: String? = null,
-        selectedRegion: android.graphics.Rect? = null
+        selectedRegion: android.graphics.Rect? = null,
+        displayWidth: Int = 0,
+        displayHeight: Int = 0
     ): UnifiedCrossAppAcquisitionResult {
         if (!busyMutex.tryLock()) {
             // Already busy. Either reject or cancel previous. We reject to keep it simple and safe.
@@ -46,7 +48,9 @@ object CrossAppReadingCoordinator {
                         ocrEngine = ocrEngine,
                         target = target,
                         appLabel = appLabel,
-                        selectedRegion = selectedRegion
+                        selectedRegion = selectedRegion,
+                        displayWidth = displayWidth,
+                        displayHeight = displayHeight
                     )
                     mapOcrResult(result)
                 }
@@ -85,6 +89,10 @@ object CrossAppReadingCoordinator {
             is CrossAppOcrAcquisitionResult.ServiceNotConnected -> UnifiedCrossAppAcquisitionResult.ServiceUnavailable
             is CrossAppOcrAcquisitionResult.InvalidTarget -> UnifiedCrossAppAcquisitionResult.InvalidTarget
             is CrossAppOcrAcquisitionResult.NoTextRecognized -> UnifiedCrossAppAcquisitionResult.NoTextAvailable
+            is CrossAppOcrAcquisitionResult.OcrReturnedEmpty -> UnifiedCrossAppAcquisitionResult.OcrReturnedEmpty
+            is CrossAppOcrAcquisitionResult.TextSegmentationEmpty -> UnifiedCrossAppAcquisitionResult.TextSegmentationEmpty
+            is CrossAppOcrAcquisitionResult.OcrProviderUnavailable -> UnifiedCrossAppAcquisitionResult.OcrProviderUnavailable(result.message)
+            is CrossAppOcrAcquisitionResult.CropOutsideScreenshot -> UnifiedCrossAppAcquisitionResult.CropOutsideScreenshot(result.details)
             is CrossAppOcrAcquisitionResult.SelectedAreaTooSmall -> UnifiedCrossAppAcquisitionResult.SelectedAreaTooSmall(result.width, result.height)
             is CrossAppOcrAcquisitionResult.SelectedAreaOutsideWindow -> UnifiedCrossAppAcquisitionResult.SelectedAreaOutsideWindow
             is CrossAppOcrAcquisitionResult.CaptureUnavailable -> UnifiedCrossAppAcquisitionResult.CaptureUnavailable(result.message)

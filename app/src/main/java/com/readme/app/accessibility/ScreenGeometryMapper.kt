@@ -147,36 +147,112 @@ object ScreenGeometryMapper {
     }
 
     /**
+     * Determines the coordinate origin of the captured screenshot.
+     */
+    enum class ScreenshotOriginMode {
+        DISPLAY_ORIGIN,
+        WINDOW_ORIGIN
+    }
+
+    /**
+     * Determines whether a captured screenshot is anchored to the physical display origin (0,0)
+     * or the target window's top-left origin.
+     */
+    fun determineOriginMode(
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        windowBounds: Rect,
+        displayWidth: Int = 0,
+        displayHeight: Int = 0
+    ): ScreenshotOriginMode {
+        val normWindow = normalizeRect(windowBounds)
+        val winW = normWindow.width().coerceAtLeast(1)
+        val winH = normWindow.height().coerceAtLeast(1)
+
+        // 1. Exact match with display dimensions
+        if (displayWidth > 0 && displayHeight > 0) {
+            val matchesDisplay = kotlin.math.abs(bitmapWidth - displayWidth) <= 2 &&
+                    kotlin.math.abs(bitmapHeight - displayHeight) <= 2
+            val matchesWindow = kotlin.math.abs(bitmapWidth - winW) <= 2 &&
+                    kotlin.math.abs(bitmapHeight - winH) <= 2
+
+            if (matchesDisplay && !matchesWindow) {
+                return ScreenshotOriginMode.DISPLAY_ORIGIN
+            }
+            if (matchesWindow && !matchesDisplay) {
+                return ScreenshotOriginMode.WINDOW_ORIGIN
+            }
+        }
+
+        // 2. If bitmap dimensions exceed window bounds (e.g. including system bars / display height),
+        // it is a display-origin capture.
+        if (bitmapHeight >= winH + 8 || bitmapWidth >= winW + 8) {
+            return ScreenshotOriginMode.DISPLAY_ORIGIN
+        }
+
+        // 3. If window origin is (0, 0), both display-origin and window-origin math produce identical results
+        if (normWindow.left == 0 && normWindow.top == 0) {
+            return ScreenshotOriginMode.DISPLAY_ORIGIN
+        }
+
+        // 4. Default to WINDOW_ORIGIN if bitmap matches window dimensions
+        return ScreenshotOriginMode.WINDOW_ORIGIN
+    }
+
+    /**
      * Converts a selection rectangle (in screen coordinates) into pixel crop bounds
-     * within a captured window bitmap.
+     * within a captured window or display bitmap.
      */
     fun calculateCropRect(
         selectionOnScreen: Rect,
         windowBounds: Rect,
         bitmapWidth: Int,
-        bitmapHeight: Int
+        bitmapHeight: Int,
+        displayWidth: Int = 0,
+        displayHeight: Int = 0,
+        originMode: ScreenshotOriginMode = determineOriginMode(
+            bitmapWidth = bitmapWidth,
+            bitmapHeight = bitmapHeight,
+            windowBounds = windowBounds,
+            displayWidth = displayWidth,
+            displayHeight = displayHeight
+        )
     ): Rect {
         val normSelection = normalizeRect(selectionOnScreen)
         val normWindow = normalizeRect(windowBounds)
 
-        val winW = (normWindow.right - normWindow.left).coerceAtLeast(1)
-        val winH = (normWindow.bottom - normWindow.top).coerceAtLeast(1)
+        return if (originMode == ScreenshotOriginMode.DISPLAY_ORIGIN) {
+            val effectiveDispW = if (displayWidth > 0) displayWidth else (normWindow.right - normWindow.left).coerceAtLeast(1)
+            val effectiveDispH = if (displayHeight > 0) displayHeight else (normWindow.bottom - normWindow.top).coerceAtLeast(1)
+            val scaleX = bitmapWidth.toFloat() / effectiveDispW.coerceAtLeast(1)
+            val scaleY = bitmapHeight.toFloat() / effectiveDispH.coerceAtLeast(1)
 
-        val scaleX = bitmapWidth.toFloat() / winW
-        val scaleY = bitmapHeight.toFloat() / winH
+            val cropLeft = (normSelection.left * scaleX).roundToInt().coerceIn(0, bitmapWidth)
+            val cropTop = (normSelection.top * scaleY).roundToInt().coerceIn(0, bitmapHeight)
+            val cropRight = (normSelection.right * scaleX).roundToInt().coerceIn(cropLeft, bitmapWidth)
+            val cropBottom = (normSelection.bottom * scaleY).roundToInt().coerceIn(cropTop, bitmapHeight)
 
-        // Translate from screen coordinates to window-relative coordinates
-        val relLeft = (normSelection.left - normWindow.left).coerceIn(0, winW)
-        val relTop = (normSelection.top - normWindow.top).coerceIn(0, winH)
-        val relRight = (normSelection.right - normWindow.left).coerceIn(0, winW)
-        val relBottom = (normSelection.bottom - normWindow.top).coerceIn(0, winH)
+            makeRect(cropLeft, cropTop, cropRight, cropBottom)
+        } else {
+            val winW = (normWindow.right - normWindow.left).coerceAtLeast(1)
+            val winH = (normWindow.bottom - normWindow.top).coerceAtLeast(1)
 
-        val cropLeft = (relLeft * scaleX).roundToInt().coerceIn(0, (bitmapWidth - 1).coerceAtLeast(0))
-        val cropTop = (relTop * scaleY).roundToInt().coerceIn(0, (bitmapHeight - 1).coerceAtLeast(0))
-        val cropRight = (relRight * scaleX).roundToInt().coerceIn(cropLeft + 1, bitmapWidth)
-        val cropBottom = (relBottom * scaleY).roundToInt().coerceIn(cropTop + 1, bitmapHeight)
+            val scaleX = bitmapWidth.toFloat() / winW
+            val scaleY = bitmapHeight.toFloat() / winH
 
-        return makeRect(cropLeft, cropTop, cropRight, cropBottom)
+            // Translate from screen coordinates to window-relative coordinates
+            val relLeft = (normSelection.left - normWindow.left).coerceIn(0, winW)
+            val relTop = (normSelection.top - normWindow.top).coerceIn(0, winH)
+            val relRight = (normSelection.right - normWindow.left).coerceIn(0, winW)
+            val relBottom = (normSelection.bottom - normWindow.top).coerceIn(0, winH)
+
+            val cropLeft = (relLeft * scaleX).roundToInt().coerceIn(0, bitmapWidth)
+            val cropTop = (relTop * scaleY).roundToInt().coerceIn(0, bitmapHeight)
+            val cropRight = (relRight * scaleX).roundToInt().coerceIn(cropLeft, bitmapWidth)
+            val cropBottom = (relBottom * scaleY).roundToInt().coerceIn(cropTop, bitmapHeight)
+
+            makeRect(cropLeft, cropTop, cropRight, cropBottom)
+        }
     }
 
     /**
@@ -207,7 +283,8 @@ object ScreenGeometryMapper {
         scaleY: Float,
         windowLeft: Float,
         windowTop: Float,
-        ocrUpscaleFactor: Float = 1.0f
+        ocrUpscaleFactor: Float = 1.0f,
+        originMode: ScreenshotOriginMode = ScreenshotOriginMode.WINDOW_ORIGIN
     ): RectF {
         val sX = if (scaleX > 0f) scaleX else 1f
         val sY = if (scaleY > 0f) scaleY else 1f
@@ -225,17 +302,15 @@ object ScreenGeometryMapper {
         val screenshotX2 = unscaledRight + cropRect.left
         val screenshotY2 = unscaledBottom + cropRect.top
 
-        // 3. Map to window space by dividing by scale factor
-        val winRelX1 = screenshotX1 / sX
-        val winRelY1 = screenshotY1 / sY
-        val winRelX2 = screenshotX2 / sX
-        val winRelY2 = screenshotY2 / sY
+        // 3. For DISPLAY_ORIGIN, screenshot space IS display space (scaled by scale factor)
+        // For WINDOW_ORIGIN, add windowLeft and windowTop offset
+        val offsetX = if (originMode == ScreenshotOriginMode.WINDOW_ORIGIN) windowLeft else 0f
+        val offsetY = if (originMode == ScreenshotOriginMode.WINDOW_ORIGIN) windowTop else 0f
 
-        // 4. Map to screen display space by adding window offset
-        val screenLeft = winRelX1 + windowLeft
-        val screenTop = winRelY1 + windowTop
-        val screenRight = winRelX2 + windowLeft
-        val screenBottom = winRelY2 + windowTop
+        val screenLeft = (screenshotX1 / sX) + offsetX
+        val screenTop = (screenshotY1 / sY) + offsetY
+        val screenRight = (screenshotX2 / sX) + offsetX
+        val screenBottom = (screenshotY2 / sY) + offsetY
 
         return makeRectF(screenLeft, screenTop, screenRight, screenBottom)
     }
@@ -251,26 +326,29 @@ object ScreenGeometryMapper {
         scaleY: Float,
         windowLeft: Float,
         windowTop: Float,
-        ocrUpscaleFactor: Float = 1.0f
+        ocrUpscaleFactor: Float = 1.0f,
+        originMode: ScreenshotOriginMode = ScreenshotOriginMode.WINDOW_ORIGIN
     ): CrossAppOcrSentence {
         val mappedBounds = mapRectFromCropToScreen(
-            sentence.bounds,
-            cropRect,
-            scaleX,
-            scaleY,
-            windowLeft,
-            windowTop,
-            ocrUpscaleFactor
+            rectInCrop = sentence.bounds,
+            cropRect = cropRect,
+            scaleX = scaleX,
+            scaleY = scaleY,
+            windowLeft = windowLeft,
+            windowTop = windowTop,
+            ocrUpscaleFactor = ocrUpscaleFactor,
+            originMode = originMode
         )
         val mappedLineBounds = sentence.lineBounds.map { lineRect ->
             mapRectFromCropToScreen(
-                lineRect,
-                cropRect,
-                scaleX,
-                scaleY,
-                windowLeft,
-                windowTop,
-                ocrUpscaleFactor
+                rectInCrop = lineRect,
+                cropRect = cropRect,
+                scaleX = scaleX,
+                scaleY = scaleY,
+                windowLeft = windowLeft,
+                windowTop = windowTop,
+                ocrUpscaleFactor = ocrUpscaleFactor,
+                originMode = originMode
             )
         }
 
