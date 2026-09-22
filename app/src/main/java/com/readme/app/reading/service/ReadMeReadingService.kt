@@ -106,14 +106,18 @@ class ReadMeReadingService : Service() {
                     sessionRuntime.readingSessionState.value,
                     sessionRuntime.activeDocumentState.value
                 )
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        initialNotification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, initialNotification)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        startForeground(
+                            NOTIFICATION_ID,
+                            initialNotification,
+                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                        )
+                    } else {
+                        startForeground(NOTIFICATION_ID, initialNotification)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ReadMeReadingService", "Failed to startForeground in onStartCommand: ${e.message}")
                 }
                 sessionRuntime.startReading()
             }
@@ -139,22 +143,30 @@ class ReadMeReadingService : Service() {
         // Notification management
         if (state.sessionState.isReading) {
             val notification = buildNotification(state.sessionState, state.docState)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    )
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("ReadMeReadingService", "Failed to startForeground: ${e.message}")
             }
         } else {
             // Stopped or paused
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-            } else {
-                @Suppress("DEPRECATION")
-                stopForeground(true)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("ReadMeReadingService", "Failed to stopForeground: ${e.message}")
             }
 
             if (visibilityState != BubbleVisibilityState.Visible && state.isForeground) {
@@ -209,41 +221,50 @@ class ReadMeReadingService : Service() {
     }
 
     private fun handleReselectArea() {
-        // 1. Stop current speech safely
-        sessionRuntime.stopReading()
-        // 2. Invalidate active session and remove current screen highlight
-        highlightOverlayController?.clearHighlight()
-        // 3. Discard current ephemeral screen document & clear old OCR geometry
-        sessionRuntime.discardEphemeralContext()
-        // 4. Open region selection overlay again
-        val service = ReadMeAccessibilityService.instance
-        val targetWindow = service?.identifyTargetWindow()
-        selectionController?.show(
-            windowBounds = targetWindow?.windowBounds,
-            onRegionSelected = { selectedRegion ->
-                executeAcquisitionFlow(CrossAppAcquisitionMode.SCREEN_OCR, selectedRegion)
-            },
-            onCancelled = {
-                // Cancel reselect: old reading does NOT restart, highlight stays cleared, bubble returns to idle
-            }
-        )
-    }
-
-    private fun startAcquisition(mode: CrossAppAcquisitionMode) {
-        if (mode == CrossAppAcquisitionMode.SCREEN_OCR) {
+        try {
+            // 1. Stop current speech safely
+            sessionRuntime.stopReading()
+            // 2. Invalidate active session and remove current screen highlight
+            highlightOverlayController?.clearHighlight()
+            // 3. Discard current ephemeral screen document & clear old OCR geometry
+            sessionRuntime.discardEphemeralContext()
+            // 4. Open region selection overlay again
             val service = ReadMeAccessibilityService.instance
             val targetWindow = service?.identifyTargetWindow()
             selectionController?.show(
                 windowBounds = targetWindow?.windowBounds,
                 onRegionSelected = { selectedRegion ->
-                    executeAcquisitionFlow(mode, selectedRegion)
+                    executeAcquisitionFlow(CrossAppAcquisitionMode.SCREEN_OCR, selectedRegion)
                 },
                 onCancelled = {
-                    // Cancelled
+                    // Cancel reselect: old reading does NOT restart, highlight stays cleared, bubble returns to idle
                 }
             )
-        } else {
-            executeAcquisitionFlow(mode, null)
+        } catch (t: Throwable) {
+            android.util.Log.e("ReadMeCrash", "Error in handleReselectArea", t)
+        }
+    }
+
+    private fun startAcquisition(mode: CrossAppAcquisitionMode) {
+        try {
+            if (mode == CrossAppAcquisitionMode.SCREEN_OCR) {
+                val service = ReadMeAccessibilityService.instance
+                val targetWindow = service?.identifyTargetWindow()
+                selectionController?.show(
+                    windowBounds = targetWindow?.windowBounds,
+                    onRegionSelected = { selectedRegion ->
+                        executeAcquisitionFlow(mode, selectedRegion)
+                    },
+                    onCancelled = {
+                        // Cancelled
+                    }
+                )
+            } else {
+                executeAcquisitionFlow(mode, null)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.e("ReadMeCrash", "Error starting acquisition", t)
+            android.widget.Toast.makeText(this@ReadMeReadingService, "Unable to read screen", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -255,61 +276,66 @@ class ReadMeReadingService : Service() {
             android.widget.Toast.makeText(this@ReadMeReadingService, "Reading screen...", android.widget.Toast.LENGTH_SHORT).show()
         }
         serviceScope.launch {
-            val service = ReadMeAccessibilityService.instance
-            val targetPkg = service?.currentActivePackage
-            val targetWindow = service?.identifyTargetWindow()
-            val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
-            val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) com.readme.app.accessibility.OnDeviceCrossAppOcrEngine() else null
-            val displayMetrics = resources.displayMetrics
-            
-            val result = try {
-                com.readme.app.accessibility.CrossAppReadingCoordinator.acquire(
-                    mode = mode,
-                    textAcquirer = service,
-                    screenshotCapturer = service,
-                    ocrEngine = ocrEngine,
-                    request = com.readme.app.accessibility.CrossAppAcquisitionRequest(targetPackageName = targetPkg),
-                    target = targetWindow,
-                    appLabel = appLabel,
-                    selectedRegion = selectedRegion,
-                    displayWidth = displayMetrics.widthPixels,
-                    displayHeight = displayMetrics.heightPixels
-                )
-            } finally {
-                ocrEngine?.close()
-            }
+            try {
+                val service = ReadMeAccessibilityService.instance
+                val targetPkg = service?.currentActivePackage
+                val targetWindow = service?.identifyTargetWindow()
+                val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
+                val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) com.readme.app.accessibility.OnDeviceCrossAppOcrEngine() else null
+                val displayMetrics = resources.displayMetrics
 
-            if (result is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.Success) {
-                sessionRuntime.loadEphemeralDocument(
-                    document = result.document,
-                    displayName = result.document.metadata.title,
-                    sourcePackageName = result.sourcePackageName,
-                    sourceAppLabel = result.sourceAppLabel,
-                    snapshotIdentity = System.currentTimeMillis()
-                )
-                sessionRuntime.startReading()
-            } else {
-                val msg = when (result) {
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.NoTextAvailable -> "No readable text found in the selected area."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrReturnedEmpty -> "No readable text found in the selected area."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.TextSegmentationEmpty -> "No sentences could be identified in the selected text."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrProviderUnavailable -> "Text recognition is currently unavailable."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.CropOutsideScreenshot -> "Selected area is outside the active screen."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaTooSmall -> "Please select a larger area."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaOutsideWindow -> "Selected area is outside the active window."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.CaptureUnavailable -> "Screen capture is unavailable."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ReadMeSelfIgnored -> "Switch to another app to read."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ServiceUnavailable -> "Accessibility service is unavailable."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.AppSwitched -> "The selected app changed before reading could begin."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.RateLimited -> "Please wait a moment before trying again."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SecureWindow -> "That screen cannot be read."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SensitiveContentBlocked -> "That screen contains protected content."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 14+."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.InvalidTarget -> "No active window found to read."
-                    is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.UnknownError -> "Unable to read selected screen."
-                    else -> "Unable to read text."
+                val result = try {
+                    com.readme.app.accessibility.CrossAppReadingCoordinator.acquire(
+                        mode = mode,
+                        textAcquirer = service,
+                        screenshotCapturer = service,
+                        ocrEngine = ocrEngine,
+                        request = com.readme.app.accessibility.CrossAppAcquisitionRequest(targetPackageName = targetPkg),
+                        target = targetWindow,
+                        appLabel = appLabel,
+                        selectedRegion = selectedRegion,
+                        displayWidth = displayMetrics.widthPixels,
+                        displayHeight = displayMetrics.heightPixels
+                    )
+                } finally {
+                    ocrEngine?.close()
                 }
-                android.widget.Toast.makeText(this@ReadMeReadingService, msg, android.widget.Toast.LENGTH_SHORT).show()
+
+                if (result is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.Success) {
+                    sessionRuntime.loadEphemeralDocument(
+                        document = result.document,
+                        displayName = result.document.metadata.title,
+                        sourcePackageName = result.sourcePackageName,
+                        sourceAppLabel = result.sourceAppLabel,
+                        snapshotIdentity = System.currentTimeMillis()
+                    )
+                    sessionRuntime.startReading()
+                } else {
+                    val msg = when (result) {
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.NoTextAvailable -> "No readable text found in the selected area."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrReturnedEmpty -> "No readable text found in the selected area."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.TextSegmentationEmpty -> "No sentences could be identified in the selected text."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrProviderUnavailable -> "Text recognition is currently unavailable."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.CropOutsideScreenshot -> "Selected area is outside the active screen."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaTooSmall -> "Please select a larger area."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaOutsideWindow -> "Selected area is outside the active window."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.CaptureUnavailable -> "Screen capture is unavailable."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ReadMeSelfIgnored -> "Switch to another app to read."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ServiceUnavailable -> "Accessibility service is unavailable."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.AppSwitched -> "The selected app changed before reading could begin."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.RateLimited -> "Please wait a moment before trying again."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SecureWindow -> "That screen cannot be read."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SensitiveContentBlocked -> "That screen contains protected content."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 14+."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.InvalidTarget -> "No active window found to read."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.UnknownError -> "Unable to read selected screen."
+                        else -> "Unable to read text."
+                    }
+                    android.widget.Toast.makeText(this@ReadMeReadingService, msg, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e("ReadMeCrash", "Error in executeAcquisitionFlow coroutine", t)
+                android.widget.Toast.makeText(this@ReadMeReadingService, "Screen reading error: ${t.message ?: "unexpected error"}", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }

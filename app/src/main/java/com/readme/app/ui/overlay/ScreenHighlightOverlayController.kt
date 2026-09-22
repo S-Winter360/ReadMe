@@ -129,6 +129,9 @@ class ScreenHighlightOverlayController(private val context: Context) {
     }
 
     private fun attachOverlay() {
+        if (!android.provider.Settings.canDrawOverlays(context)) {
+            return
+        }
         val wm = windowManager ?: return
 
         val view = object : View(context) {

@@ -11,6 +11,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
+import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.MotionEvent
@@ -52,15 +53,30 @@ class ScreenRegionSelectionController(private val context: Context) {
             dismiss()
         }
 
+        if (!android.provider.Settings.canDrawOverlays(context)) {
+            onCancelled()
+            return
+        }
+
         val wm = windowManager ?: run {
             onCancelled()
             return
         }
 
-        val dm = DisplayMetrics()
-        wm.defaultDisplay?.getRealMetrics(dm)
-        val screenW = dm.widthPixels
-        val screenH = dm.heightPixels
+        val dm = context.resources.displayMetrics
+        var screenW = dm.widthPixels.coerceAtLeast(720)
+        var screenH = dm.heightPixels.coerceAtLeast(1280)
+        try {
+            val realDm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay?.getRealMetrics(realDm)
+            if (realDm.widthPixels > 0 && realDm.heightPixels > 0) {
+                screenW = realDm.widthPixels
+                screenH = realDm.heightPixels
+            }
+        } catch (_: Throwable) {
+            // Keep resources.displayMetrics
+        }
 
         val effectiveBounds = windowBounds?.takeIf { !it.isEmpty }
             ?: Rect(0, 0, screenW, screenH)
@@ -395,7 +411,8 @@ class ScreenRegionSelectionController(private val context: Context) {
             wm.addView(root, params)
             overlayView = root
             isAdded = true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            android.util.Log.e("ReadMeCrash", "Failed to add selection overlay window", e)
             isAdded = false
             overlayView = null
             onCancelled()
@@ -406,7 +423,7 @@ class ScreenRegionSelectionController(private val context: Context) {
         if (isAdded) {
             try {
                 overlayView?.let { windowManager?.removeView(it) }
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
             } finally {
                 overlayView = null
                 isAdded = false

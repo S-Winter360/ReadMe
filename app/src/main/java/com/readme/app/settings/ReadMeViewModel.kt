@@ -283,11 +283,15 @@ class ReadMeViewModel @JvmOverloads constructor(
         sessionRuntime.resumeReading()
     }
 
-    fun selectTextFile(uri: Uri) {
+    fun selectTextFile(uri: Uri?) {
         selectDocument(uri)
     }
 
-    fun selectDocument(uri: Uri) {
+    fun selectDocument(uri: Uri?) {
+        if (uri == null) {
+            return
+        }
+
         sessionRuntime.onOpeningNormalDocument()
         stopReading()
         navigationCoordinator.clearDocument()
@@ -295,14 +299,26 @@ class ReadMeViewModel @JvmOverloads constructor(
         try {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
             getApplication<Application>().contentResolver.takePersistableUriPermission(uri, flags)
-        } catch (e: Exception) {
+        } catch (_: Throwable) {
             // Some providers do not support persistable permissions; proceed safely
         }
 
         val resolver = getApplication<Application>().contentResolver
-        val displayName = TxtContentSource.resolveDisplayName(resolver, uri)
-        val mimeType = resolver.getType(uri)
-        val format = DocumentFormatDetector.detect(mimeType, displayName)
+        val displayName = try {
+            TxtContentSource.resolveDisplayName(resolver, uri)
+        } catch (_: Throwable) {
+            "Document"
+        }
+        val mimeType = try {
+            resolver.getType(uri)
+        } catch (_: Throwable) {
+            null
+        }
+        val format = try {
+            DocumentFormatDetector.detect(mimeType, displayName)
+        } catch (_: Throwable) {
+            DetectedFormat.UNKNOWN
+        }
 
         // Stop any active reading before loading a new document
         if (sessionCoordinator.readingSessionState.value.isReading) {
@@ -373,8 +389,9 @@ class ReadMeViewModel @JvmOverloads constructor(
                         sessionCoordinator.onDocumentLoadFailed(loadToken, "No selectable text was found in this PDF.")
                         _pdfViewerState.value = PdfViewerState.Empty
                         updatePdfSyncState()
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== pdfSource) return@launch
+                        android.util.Log.e("ReadMeCrash", "PDF loading error", e)
                         sessionCoordinator.onDocumentLoadFailed(loadToken, "Unable to read selected PDF file")
                         _pdfViewerState.value = PdfViewerState.Empty
                         updatePdfSyncState()
@@ -402,8 +419,9 @@ class ReadMeViewModel @JvmOverloads constructor(
                     } catch (e: com.readme.app.reading.content.epub.EpubDrmException) {
                         if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== epubSource) return@launch
                         sessionCoordinator.onDocumentLoadFailed(loadToken, "DRM-protected EPUB files are not supported")
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== epubSource) return@launch
+                        android.util.Log.e("ReadMeCrash", "EPUB loading error", e)
                         sessionCoordinator.onDocumentLoadFailed(loadToken, "Unable to read selected EPUB file")
                     }
                 }
@@ -426,8 +444,9 @@ class ReadMeViewModel @JvmOverloads constructor(
                         }
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         if (!sessionCoordinator.isCurrentLoadToken(loadToken) || activeContentSource !== txtSource) return@launch
+                        android.util.Log.e("ReadMeCrash", "TXT loading error", e)
                         sessionCoordinator.onDocumentLoadFailed(loadToken, "Unable to read selected text file")
                     }
                 }

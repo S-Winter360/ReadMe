@@ -36,8 +36,14 @@ class EpubContentSource(
             resolveDisplayName(resolver, uri)
         }
 
-        val inputStream = resolver.openInputStream(uri)
-            ?: throw IOException("Cannot open input stream for EPUB URI: $uri")
+        val inputStream = try {
+            resolver.openInputStream(uri)
+                ?: throw IOException("Cannot open input stream for EPUB URI: $uri")
+        } catch (e: SecurityException) {
+            throw SecurityException("Permission denied for EPUB URI: $uri", e)
+        } catch (e: java.io.FileNotFoundException) {
+            throw java.io.FileNotFoundException("EPUB file not found for URI: $uri")
+        }
 
         inputStream.use { stream ->
             EpubPackageParser.parse(inputStream = stream, fallbackTitle = displayName)
@@ -52,8 +58,14 @@ class EpubContentSource(
             resolveDisplayName(resolver, uri)
         }
 
-        val inputStream = resolver.openInputStream(uri)
-            ?: throw IOException("Cannot open input stream for EPUB URI: $uri")
+        val inputStream = try {
+            resolver.openInputStream(uri)
+                ?: throw IOException("Cannot open input stream for EPUB URI: $uri")
+        } catch (e: SecurityException) {
+            throw SecurityException("Permission denied for EPUB URI: $uri", e)
+        } catch (e: java.io.FileNotFoundException) {
+            throw java.io.FileNotFoundException("EPUB file not found for URI: $uri")
+        }
 
         inputStream.use { stream ->
             EpubDocumentParser.parse(

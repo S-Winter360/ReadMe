@@ -27,10 +27,22 @@ class TxtContentSource(
             resolveDisplayName(resolver, uri)
         }
 
-        val inputStream = resolver.openInputStream(uri)
-            ?: throw IOException("Cannot open input stream for URI: $uri")
+        val inputStream = try {
+            resolver.openInputStream(uri)
+                ?: throw IOException("Cannot open input stream for URI: $uri")
+        } catch (e: SecurityException) {
+            throw SecurityException("Permission denied for URI: $uri", e)
+        } catch (e: java.io.FileNotFoundException) {
+            throw java.io.FileNotFoundException("File not found for URI: $uri")
+        }
 
-        val rawText = inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val rawText = try {
+            inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } catch (e: SecurityException) {
+            throw SecurityException("Permission denied while reading URI: $uri", e)
+        } catch (e: java.io.FileNotFoundException) {
+            throw java.io.FileNotFoundException("File not found while reading URI: $uri")
+        }
         val cleanTitleSlug = fileName
             .filter { it.isLetterOrDigit() }
             .lowercase()

@@ -104,10 +104,11 @@ fun PdfReaderView(
         onDispose {
             currentOnNavigatorReady(null)
             try {
+                activePdfView?.pdfDocument = null
+            } catch (_: Throwable) {}
+            try {
                 pdfDocument?.close()
-            } catch (e: Exception) {
-                // Ignore close errors
-            }
+            } catch (_: Throwable) {}
             pdfDocument = null
         }
     }
@@ -179,9 +180,14 @@ fun PdfReaderView(
                     onRelease = { view ->
                         activePdfView = null
                         currentOnNavigatorReady(null)
-                        listenerRef?.let { listener ->
-                            view.removeOnViewportChangedListener(listener)
-                        }
+                        try {
+                            listenerRef?.let { listener ->
+                                view.removeOnViewportChangedListener(listener)
+                            }
+                        } catch (_: Throwable) {}
+                        try {
+                            view.pdfDocument = null
+                        } catch (_: Throwable) {}
                     },
                     modifier = Modifier
                         .fillMaxSize()

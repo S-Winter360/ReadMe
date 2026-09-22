@@ -30,12 +30,19 @@ class PdfContentSource(
         val safeContext = context ?: throw IOException("Context is required for PDF loading")
         val safeUri = uri ?: throw IOException("URI is required for PDF loading")
 
-        val loader = androidx.pdf.SandboxedPdfLoader(safeContext, Dispatchers.IO)
+        val loader = try {
+            androidx.pdf.SandboxedPdfLoader(safeContext, Dispatchers.IO)
+        } catch (e: Throwable) {
+            throw PdfExtractionException("Failed to initialize PDF loader: ${e.message}", e)
+        }
+
         val pdfDocument = try {
             loader.openDocument(safeUri, "")
         } catch (e: Exception) {
             when {
                 e.javaClass.simpleName == "PdfPasswordException" -> throw PdfPasswordRequiredException("Password required for this PDF.")
+                e is SecurityException -> throw SecurityException("Permission denied for PDF URI", e)
+                e is java.io.FileNotFoundException -> throw java.io.FileNotFoundException("PDF file not found: ${e.message}")
                 else -> throw PdfExtractionException("Failed to load PDF", e)
             }
         }
