@@ -3,17 +3,24 @@ package com.readme.app.ui.overlay
 import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Looper
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import androidx.annotation.VisibleForTesting
+import com.readme.app.BuildConfig
 import com.readme.app.accessibility.CrossAppAcquisitionMode
+import com.readme.app.diagnostics.ReadMeCrashLogger
 import com.readme.app.reading.ActiveDocumentState
 import com.readme.app.reading.ActiveReadingSessionState
 
 class SystemFloatingBubbleController(private val context: Context) {
+
+    val controllerInstanceId: Long = ReadMeCrashLogger.controllerInstanceCounter.incrementAndGet()
+
     private var windowManager: WindowManager? = null
     private var bubbleView: SystemFloatingBubbleView? = null
     private var closeZoneController: CloseZoneOverlayController? = null
@@ -23,8 +30,12 @@ class SystemFloatingBubbleController(private val context: Context) {
         get() = isAdded
 
     init {
+        ReadMeCrashLogger.currentControllerInstanceId = controllerInstanceId
         windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         closeZoneController = CloseZoneOverlayController(context)
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "SystemFloatingBubbleController initialized (ID: $controllerInstanceId)")
+        }
     }
 
     fun show(
@@ -40,49 +51,89 @@ class SystemFloatingBubbleController(private val context: Context) {
         onCloseBubble: () -> Unit = {},
         onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
     ) {
-        if (!Settings.canDrawOverlays(context)) return
-
-        if (bubbleView == null) {
-            bubbleView = SystemFloatingBubbleView(context).apply {
-                setContent(
-                    sessionState = sessionState,
-                    activeDocumentState = activeDocumentState,
-                    crossAppReadingEnabled = crossAppReadingEnabled,
-                    canAcquireText = canAcquireText,
-                    onToggleReading = onToggleReading,
-                    onPauseReading = onPauseReading,
-                    onResumeReading = onResumeReading,
-                    onReselectArea = onReselectArea,
-                    onStopReading = onStopReading,
-                    onCloseBubble = onCloseBubble,
-                    onAcquireMode = onAcquireMode
-                )
-                start()
-            }
-        } else {
-            updateState(
-                sessionState = sessionState,
-                activeDocumentState = activeDocumentState,
-                crossAppReadingEnabled = crossAppReadingEnabled,
-                canAcquireText = canAcquireText,
-                onToggleReading = onToggleReading,
-                onPauseReading = onPauseReading,
-                onResumeReading = onResumeReading,
-                onReselectArea = onReselectArea,
-                onStopReading = onStopReading,
-                onCloseBubble = onCloseBubble,
-                onAcquireMode = onAcquireMode
-            )
+        val hasOverlay = Settings.canDrawOverlays(context)
+        ReadMeCrashLogger.overlayPermissionGranted = hasOverlay
+        if (!hasOverlay) {
+            ReadMeCrashLogger.bubbleControllerState = "PermissionUnavailable"
             return
         }
+
+        val wm = windowManager ?: run {
+            ReadMeCrashLogger.bubbleControllerState = "OverlayUnavailable"
+            return
+        }
+
+        if (bubbleView == null) {
+            bubbleView = SystemFloatingBubbleView(context)
+        }
+
+        val view = bubbleView ?: return
+
+        val payload = BubbleViewPayload(
+            sessionState = sessionState,
+            activeDocumentState = activeDocumentState,
+            crossAppReadingEnabled = crossAppReadingEnabled,
+            canAcquireText = canAcquireText,
+            onToggleReading = onToggleReading,
+            onPauseReading = onPauseReading,
+            onResumeReading = onResumeReading,
+            onReselectArea = onReselectArea,
+            onStopReading = onStopReading,
+            onCloseBubble = onCloseBubble,
+            onAcquireMode = onAcquireMode,
+            onDragStart = { handleDragStart() },
+            onDrag = { dx, dy -> handleDrag(view, dx, dy) },
+            onDragEnd = { handleDragEnd(view, onCloseBubble) },
+            onDragCancel = { handleDragCancel(view) }
+        )
+        view.updatePayload(payload)
 
         if (!isAdded) {
             try {
                 val params = createLayoutParams()
-                windowManager?.addView(bubbleView, params)
+                wm.addView(view, params)
                 isAdded = true
-            } catch (e: Exception) {
+                view.start()
+                ReadMeCrashLogger.bubbleAddCount.incrementAndGet()
+                ReadMeCrashLogger.isBubbleViewAttached = true
+                ReadMeCrashLogger.bubbleControllerState = "Visible"
+                if (BuildConfig.DEBUG) {
+                    Log.d(TAG, "Bubble attached (Controller: $controllerInstanceId, AddCount: ${ReadMeCrashLogger.bubbleAddCount.get()})")
+                }
+            } catch (e: WindowManager.BadTokenException) {
+                Log.e(TAG, "BadTokenException adding bubble overlay", e)
                 isAdded = false
+                ReadMeCrashLogger.bubbleControllerState = "OverlayUnavailable"
+            } catch (e: SecurityException) {
+                Log.e(TAG, "SecurityException adding bubble overlay", e)
+                isAdded = false
+                ReadMeCrashLogger.bubbleControllerState = "PermissionUnavailable"
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to add bubbleView to WindowManager", e)
+                isAdded = false
+                ReadMeCrashLogger.bubbleControllerState = "OverlayUnavailable"
+            }
+        } else {
+            // Already added: ensure position is clamped
+            val params = view.layoutParams as? WindowManager.LayoutParams
+            if (params != null) {
+                val dm = DisplayMetrics()
+                wm.defaultDisplay?.getMetrics(dm)
+                val (clampedX, clampedY) = clampPosition(
+                    params.x,
+                    params.y,
+                    view.width,
+                    view.height,
+                    dm.widthPixels,
+                    dm.heightPixels
+                )
+                if (params.x != clampedX || params.y != clampedY) {
+                    params.x = clampedX
+                    params.y = clampedY
+                    try {
+                        wm.updateViewLayout(view, params)
+                    } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -100,8 +151,11 @@ class SystemFloatingBubbleController(private val context: Context) {
         onCloseBubble: () -> Unit = {},
         onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
     ) {
-        if (!Settings.canDrawOverlays(context)) {
+        val hasOverlay = Settings.canDrawOverlays(context)
+        ReadMeCrashLogger.overlayPermissionGranted = hasOverlay
+        if (!hasOverlay) {
             hide()
+            ReadMeCrashLogger.bubbleControllerState = "PermissionUnavailable"
             return
         }
 
@@ -122,33 +176,32 @@ class SystemFloatingBubbleController(private val context: Context) {
             return
         }
 
+        val view = bubbleView ?: return
+        val wm = windowManager
+
         // Clamp bubble within screen bounds
-        bubbleView?.let { view ->
-            val params = view.layoutParams as? WindowManager.LayoutParams
-            if (params != null) {
-                val displayMetrics = DisplayMetrics()
-                windowManager?.defaultDisplay?.getMetrics(displayMetrics)
-                val (clampedX, clampedY) = clampPosition(
-                    params.x,
-                    params.y,
-                    view.width,
-                    view.height,
-                    displayMetrics.widthPixels,
-                    displayMetrics.heightPixels
-                )
-                if (params.x != clampedX || params.y != clampedY) {
-                    params.x = clampedX
-                    params.y = clampedY
-                    try {
-                        windowManager?.updateViewLayout(view, params)
-                    } catch (e: Exception) {
-                        // ignore
-                    }
-                }
+        val params = view.layoutParams as? WindowManager.LayoutParams
+        if (params != null && wm != null) {
+            val displayMetrics = DisplayMetrics()
+            wm.defaultDisplay?.getMetrics(displayMetrics)
+            val (clampedX, clampedY) = clampPosition(
+                params.x,
+                params.y,
+                view.width,
+                view.height,
+                displayMetrics.widthPixels,
+                displayMetrics.heightPixels
+            )
+            if (params.x != clampedX || params.y != clampedY) {
+                params.x = clampedX
+                params.y = clampedY
+                try {
+                    wm.updateViewLayout(view, params)
+                } catch (_: Exception) {}
             }
         }
 
-        bubbleView?.setContent(
+        val payload = BubbleViewPayload(
             sessionState = sessionState,
             activeDocumentState = activeDocumentState,
             crossAppReadingEnabled = crossAppReadingEnabled,
@@ -159,42 +212,13 @@ class SystemFloatingBubbleController(private val context: Context) {
             onReselectArea = onReselectArea,
             onStopReading = onStopReading,
             onCloseBubble = onCloseBubble,
-            onAcquireMode = onAcquireMode
+            onAcquireMode = onAcquireMode,
+            onDragStart = { handleDragStart() },
+            onDrag = { dx, dy -> handleDrag(view, dx, dy) },
+            onDragEnd = { handleDragEnd(view, onCloseBubble) },
+            onDragCancel = { handleDragCancel(view) }
         )
-    }
-
-    private fun SystemFloatingBubbleView.setContent(
-        sessionState: ActiveReadingSessionState,
-        activeDocumentState: ActiveDocumentState,
-        crossAppReadingEnabled: Boolean,
-        canAcquireText: Boolean,
-        onToggleReading: () -> Unit,
-        onPauseReading: () -> Unit,
-        onResumeReading: () -> Unit,
-        onReselectArea: () -> Unit,
-        onStopReading: () -> Unit,
-        onCloseBubble: () -> Unit,
-        onAcquireMode: (CrossAppAcquisitionMode) -> Unit
-    ) {
-        composeView.setContent {
-            SystemFloatingBubbleContent(
-                sessionState = sessionState,
-                activeDocumentState = activeDocumentState,
-                crossAppReadingEnabled = crossAppReadingEnabled,
-                canAcquireText = canAcquireText,
-                onToggleReading = onToggleReading,
-                onPauseReading = onPauseReading,
-                onResumeReading = onResumeReading,
-                onReselectArea = onReselectArea,
-                onStopReading = onStopReading,
-                onCloseBubble = onCloseBubble,
-                onAcquireMode = onAcquireMode,
-                onDragStart = { handleDragStart() },
-                onDrag = { dx, dy -> handleDrag(this, dx, dy) },
-                onDragEnd = { handleDragEnd(this, onCloseBubble) },
-                onDragCancel = { handleDragCancel(this) }
-            )
-        }
+        view.updatePayload(payload)
     }
 
     private fun handleDragStart() {
@@ -220,9 +244,7 @@ class SystemFloatingBubbleController(private val context: Context) {
 
         try {
             windowManager?.updateViewLayout(view, params)
-        } catch (e: Exception) {
-            // Ignore during transitions
-        }
+        } catch (_: Exception) {}
     }
 
     private fun handleDragEnd(view: View, onCloseBubble: () -> Unit) {
@@ -257,9 +279,7 @@ class SystemFloatingBubbleController(private val context: Context) {
             params.y = clampedY
             try {
                 windowManager?.updateViewLayout(view, params)
-            } catch (e: Exception) {
-                // Ignore
-            }
+            } catch (_: Exception) {}
         }
     }
 
@@ -280,21 +300,30 @@ class SystemFloatingBubbleController(private val context: Context) {
         params.y = clampedY
         try {
             windowManager?.updateViewLayout(view, params)
-        } catch (e: Exception) {
-            // Ignore
-        }
+        } catch (_: Exception) {}
     }
 
     fun hide() {
         closeZoneController?.hide()
         if (isAdded) {
+            val view = bubbleView
             try {
-                bubbleView?.stop()
-                windowManager?.removeView(bubbleView)
+                view?.stop()
+                if (view != null) {
+                    windowManager?.removeView(view)
+                    ReadMeCrashLogger.bubbleRemoveCount.incrementAndGet()
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, "Bubble removed (Controller: $controllerInstanceId, RemoveCount: ${ReadMeCrashLogger.bubbleRemoveCount.get()})")
+                    }
+                }
             } catch (e: Exception) {
-                // Safely handle already removed
+                Log.w(TAG, "Exception while removing bubbleView: ${e.message}")
             } finally {
                 isAdded = false
+                ReadMeCrashLogger.isBubbleViewAttached = false
+                ReadMeCrashLogger.bubbleControllerState = "Hidden"
+                view?.destroy()
+                bubbleView = null
             }
         }
     }
@@ -330,6 +359,8 @@ class SystemFloatingBubbleController(private val context: Context) {
     }
 
     companion object {
+        private const val TAG = "SystemFloatingBubble"
+
         fun shouldDisplaySystemBubble(
             isSystemBubbleEnabled: Boolean,
             hasOverlayPermission: Boolean,

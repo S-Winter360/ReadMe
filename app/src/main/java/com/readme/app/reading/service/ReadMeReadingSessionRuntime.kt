@@ -88,6 +88,13 @@ class ReadMeReadingSessionRuntime(
     private val _isBubbleClosedByUser = MutableStateFlow(false)
     val isBubbleClosedByUser: StateFlow<Boolean> = _isBubbleClosedByUser.asStateFlow()
 
+    private val _isDocumentPickerActive = MutableStateFlow(false)
+    val isDocumentPickerActive: StateFlow<Boolean> = _isDocumentPickerActive.asStateFlow()
+
+    fun setDocumentPickerActive(active: Boolean) {
+        _isDocumentPickerActive.value = active
+    }
+
     fun setAppForeground(isForeground: Boolean) {
         _appForegroundState.value = isForeground
         if (!isForeground) {

@@ -11,17 +11,24 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.readme.app.BuildConfig
 import com.readme.app.MainActivity
 import com.readme.app.R
 import com.readme.app.accessibility.CrossAppAcquisitionMode
 import com.readme.app.accessibility.ReadMeAccessibilityService
+import com.readme.app.diagnostics.ReadMeCrashLogger
 import com.readme.app.reading.ActiveDocumentState
 import com.readme.app.reading.ActiveReadingSessionState
+import com.readme.app.reading.ReadingSessionState
 import com.readme.app.settings.ReadMeSettings
 import com.readme.app.settings.ReadMeSettingsRepository
 import com.readme.app.ui.overlay.BubbleLifecyclePolicy
 import com.readme.app.ui.overlay.BubbleVisibilityState
+import com.readme.app.ui.overlay.ScreenHighlightOverlayController
+import com.readme.app.ui.overlay.ScreenRegionSelectionController
 import com.readme.app.ui.overlay.SystemFloatingBubbleController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,12 +39,15 @@ import kotlinx.coroutines.launch
 
 class ReadMeReadingService : Service() {
 
+    val serviceInstanceId: Long = ReadMeCrashLogger.serviceInstanceCounter.incrementAndGet()
+
     private val sessionRuntime by lazy { ReadMeReadingSessionRuntime.getInstance(applicationContext) }
     private val settingsRepo by lazy { sessionRuntime.settingsRepository ?: ReadMeSettingsRepository(applicationContext) }
     private var bubbleController: SystemFloatingBubbleController? = null
-    private var selectionController: com.readme.app.ui.overlay.ScreenRegionSelectionController? = null
-    private var highlightOverlayController: com.readme.app.ui.overlay.ScreenHighlightOverlayController? = null
+    private var selectionController: ScreenRegionSelectionController? = null
+    private var highlightOverlayController: ScreenHighlightOverlayController? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var lastSettings: ReadMeSettings = ReadMeSettings()
 
     private val notificationManager by lazy {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -45,20 +55,39 @@ class ReadMeReadingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        ReadMeCrashLogger.currentServiceInstanceId = serviceInstanceId
+        ReadMeCrashLogger.currentLifecycleState = "ServiceCreated"
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "ReadMeReadingService onCreate (ID: $serviceInstanceId)")
+        }
+
         createNotificationChannel()
         bubbleController = SystemFloatingBubbleController(applicationContext)
-        selectionController = com.readme.app.ui.overlay.ScreenRegionSelectionController(applicationContext)
-        highlightOverlayController = com.readme.app.ui.overlay.ScreenHighlightOverlayController(applicationContext)
+        selectionController = ScreenRegionSelectionController(applicationContext)
+        highlightOverlayController = ScreenHighlightOverlayController(applicationContext)
+
+        val foregroundAndPickerFlow = combine(
+            sessionRuntime.appForegroundState,
+            sessionRuntime.isDocumentPickerActive
+        ) { fg, dp -> fg to dp }
 
         serviceScope.launch {
             combine(
                 sessionRuntime.readingSessionState,
                 sessionRuntime.activeDocumentState,
-                sessionRuntime.appForegroundState,
+                foregroundAndPickerFlow,
                 settingsRepo.settingsFlow,
                 sessionRuntime.isBubbleClosedByUser
-            ) { sessionState, docState, isForeground, settings, isClosedByUser ->
-                BubbleAndNotificationState(sessionState, docState, isForeground, settings, isClosedByUser)
+            ) { sessionState, docState, fgAndDp, settings, isClosedByUser ->
+                lastSettings = settings
+                BubbleAndNotificationState(
+                    sessionState = sessionState,
+                    docState = docState,
+                    isForeground = fgAndDp.first,
+                    isDocumentPickerActive = fgAndDp.second,
+                    settings = settings,
+                    isClosedByUser = isClosedByUser
+                )
             }.collect { state ->
                 updateNotificationAndBubble(state)
             }
@@ -72,7 +101,7 @@ class ReadMeReadingService : Service() {
             ) { sessionState, currentSeg, docState ->
                 Triple(sessionState, currentSeg, docState)
             }.collect { (sessionState, currentSeg, docState) ->
-                val shouldHighlight = (sessionState.isReading || (sessionState.sessionState == com.readme.app.reading.ReadingSessionState.Stopped && !sessionState.isCompleted)) &&
+                val shouldHighlight = (sessionState.isReading || (sessionState.sessionState == ReadingSessionState.Stopped && !sessionState.isCompleted)) &&
                         currentSeg != null &&
                         currentSeg.boundingBoxes.isNotEmpty() &&
                         docState.isEphemeral
@@ -100,6 +129,9 @@ class ReadMeReadingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "ReadMeReadingService onStartCommand: action=${intent?.action} (ID: $serviceInstanceId)")
+        }
         when (intent?.action) {
             ACTION_START_READING -> {
                 val initialNotification = buildNotification(
@@ -117,7 +149,7 @@ class ReadMeReadingService : Service() {
                         startForeground(NOTIFICATION_ID, initialNotification)
                     }
                 } catch (e: Exception) {
-                    android.util.Log.w("ReadMeReadingService", "Failed to startForeground in onStartCommand: ${e.message}")
+                    Log.w(TAG, "Failed to startForeground in onStartCommand: ${e.message}")
                 }
                 sessionRuntime.startReading()
             }
@@ -133,11 +165,15 @@ class ReadMeReadingService : Service() {
 
     private fun updateNotificationAndBubble(state: BubbleAndNotificationState) {
         val canDraw = Settings.canDrawOverlays(this)
+        ReadMeCrashLogger.currentReadingState = if (state.sessionState.isReading) "Reading" else "Idle"
+        ReadMeCrashLogger.isAppForeground = state.isForeground
+
         val visibilityState = BubbleLifecyclePolicy.computeVisibilityState(
             isFloatingEnabled = state.settings.isFloatingReadmeEnabled,
             hasOverlayPermission = canDraw,
             isForeground = state.isForeground,
-            isClosedByUser = state.isClosedByUser
+            isClosedByUser = state.isClosedByUser,
+            isDocumentPickerActive = state.isDocumentPickerActive
         )
 
         // Notification management
@@ -154,7 +190,7 @@ class ReadMeReadingService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
             } catch (e: Exception) {
-                android.util.Log.w("ReadMeReadingService", "Failed to startForeground: ${e.message}")
+                Log.w(TAG, "Failed to startForeground: ${e.message}")
             }
         } else {
             // Stopped or paused
@@ -166,11 +202,11 @@ class ReadMeReadingService : Service() {
                     stopForeground(true)
                 }
             } catch (e: Exception) {
-                android.util.Log.w("ReadMeReadingService", "Failed to stopForeground: ${e.message}")
+                Log.w(TAG, "Failed to stopForeground: ${e.message}")
             }
 
-            if (visibilityState != BubbleVisibilityState.Visible && state.isForeground) {
-                // If not reading, no bubble to show, and app is foreground, service can stop
+            // Only stop service if floating bubble is disabled AND not reading
+            if (!state.settings.isFloatingReadmeEnabled && !state.sessionState.isReading) {
                 stopSelf()
             }
         }
@@ -221,33 +257,18 @@ class ReadMeReadingService : Service() {
     }
 
     private fun handleReselectArea() {
-        try {
-            // 1. Stop current speech safely
-            sessionRuntime.stopReading()
-            // 2. Invalidate active session and remove current screen highlight
-            highlightOverlayController?.clearHighlight()
-            // 3. Discard current ephemeral screen document & clear old OCR geometry
-            sessionRuntime.discardEphemeralContext()
-            // 4. Open region selection overlay again
-            val service = ReadMeAccessibilityService.instance
-            val targetWindow = service?.identifyTargetWindow()
-            selectionController?.show(
-                windowBounds = targetWindow?.windowBounds,
-                onRegionSelected = { selectedRegion ->
-                    executeAcquisitionFlow(CrossAppAcquisitionMode.SCREEN_OCR, selectedRegion)
-                },
-                onCancelled = {
-                    // Cancel reselect: old reading does NOT restart, highlight stays cleared, bubble returns to idle
-                }
-            )
-        } catch (t: Throwable) {
-            android.util.Log.e("ReadMeCrash", "Error in handleReselectArea", t)
+        val docState = sessionRuntime.activeDocumentState.value
+        if (docState.isEphemeral) {
+            sessionRuntime.pauseReading()
+            startAcquisition(CrossAppAcquisitionMode.SCREEN_OCR)
         }
     }
 
     private fun startAcquisition(mode: CrossAppAcquisitionMode) {
         try {
             if (mode == CrossAppAcquisitionMode.SCREEN_OCR) {
+                // Temporarily hide the floating bubble so it doesn't obstruct region selection
+                bubbleController?.hide()
                 val service = ReadMeAccessibilityService.instance
                 val targetWindow = service?.identifyTargetWindow()
                 selectionController?.show(
@@ -256,15 +277,34 @@ class ReadMeReadingService : Service() {
                         executeAcquisitionFlow(mode, selectedRegion)
                     },
                     onCancelled = {
-                        // Cancelled
+                        // If cancelled, restore bubble visibility
+                        val canDraw = Settings.canDrawOverlays(this@ReadMeReadingService)
+                        val docState = sessionRuntime.activeDocumentState.value
+                        val settings = lastSettings
+                        if (BubbleLifecyclePolicy.computeVisibilityState(
+                                isFloatingEnabled = settings.isFloatingReadmeEnabled,
+                                hasOverlayPermission = canDraw,
+                                isForeground = sessionRuntime.appForegroundState.value,
+                                isClosedByUser = sessionRuntime.isBubbleClosedByUser.value,
+                                isDocumentPickerActive = sessionRuntime.isDocumentPickerActive.value
+                            ) == BubbleVisibilityState.Visible
+                        ) {
+                            val sessionState = sessionRuntime.readingSessionState.value
+                            bubbleController?.show(
+                                sessionState = sessionState,
+                                activeDocumentState = docState,
+                                crossAppReadingEnabled = settings.isCrossAppReadingEnabled,
+                                canAcquireText = ReadMeAccessibilityService.isConnected && settings.isCrossAppReadingEnabled && !docState.hasActiveDocument
+                            )
+                        }
                     }
                 )
             } else {
                 executeAcquisitionFlow(mode, null)
             }
         } catch (t: Throwable) {
-            android.util.Log.e("ReadMeCrash", "Error starting acquisition", t)
-            android.widget.Toast.makeText(this@ReadMeReadingService, "Unable to read screen", android.widget.Toast.LENGTH_SHORT).show()
+            Log.e(TAG, "Error starting acquisition", t)
+            Toast.makeText(this@ReadMeReadingService, "Unable to read screen", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -273,7 +313,7 @@ class ReadMeReadingService : Service() {
         selectedRegion: android.graphics.Rect?
     ) {
         if (mode == CrossAppAcquisitionMode.SCREEN_OCR) {
-            android.widget.Toast.makeText(this@ReadMeReadingService, "Reading screen...", android.widget.Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@ReadMeReadingService, "Reading screen...", Toast.LENGTH_SHORT).show()
         }
         serviceScope.launch {
             try {
@@ -331,11 +371,11 @@ class ReadMeReadingService : Service() {
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.UnknownError -> "Unable to read selected screen."
                         else -> "Unable to read text."
                     }
-                    android.widget.Toast.makeText(this@ReadMeReadingService, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@ReadMeReadingService, msg, Toast.LENGTH_SHORT).show()
                 }
             } catch (t: Throwable) {
-                android.util.Log.e("ReadMeCrash", "Error in executeAcquisitionFlow coroutine", t)
-                android.widget.Toast.makeText(this@ReadMeReadingService, "Screen reading error: ${t.message ?: "unexpected error"}", android.widget.Toast.LENGTH_SHORT).show()
+                Log.e(TAG, "Error in executeAcquisitionFlow coroutine", t)
+                Toast.makeText(this@ReadMeReadingService, "Screen reading error: ${t.message ?: "unexpected error"}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -343,68 +383,55 @@ class ReadMeReadingService : Service() {
     private fun getApplicationLabel(packageName: String): String {
         return try {
             val pm = packageManager
-            val info = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                pm.getApplicationInfo(packageName, android.content.pm.PackageManager.ApplicationInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION")
-                pm.getApplicationInfo(packageName, 0)
-            }
-            pm.getApplicationLabel(info).toString()
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationLabel(appInfo).toString()
         } catch (_: Exception) {
-            packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+            packageName
         }
     }
 
     private fun buildNotification(
         sessionState: ActiveReadingSessionState,
-        activeDocState: ActiveDocumentState
+        docState: ActiveDocumentState
     ): Notification {
-        val title = if (activeDocState.isEphemeral) {
-            val appLabel = activeDocState.sourceAppLabel ?: activeDocState.sourcePackageName?.substringAfterLast('.')?.replaceFirstChar { it.uppercase() }
-            if (!appLabel.isNullOrBlank()) "Reading from $appLabel" else activeDocState.displayName
-        } else {
-            activeDocState.displayName.ifBlank { activeDocState.title }.ifBlank { "ReadMe" }
+        val title = when {
+            docState.isEphemeral -> "Reading Screen: ${docState.sourceAppLabel ?: "App"}"
+            docState.hasActiveDocument -> docState.displayName.ifBlank { docState.title }
+            else -> "ReadMe"
         }
-        val content = if (sessionState.isReading) {
-            val segment = sessionRuntime.readingEngine.currentSegment.value
-            segment?.text?.take(80) ?: "Reading in progress..."
-        } else {
-            "Reading stopped"
+        val text = when {
+            sessionState.isReading -> "Reading in progress..."
+            sessionState.isCompleted -> "Reading completed"
+            else -> "Ready to read"
         }
 
-        val openAppIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val openAppPendingIntent = PendingIntent.getActivity(
+        val openAppIntent = PendingIntent.getActivity(
             this,
             0,
-            openAppIntent,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val toggleIntent = Intent(this, ReadMeReadingService::class.java).apply {
-            action = if (sessionState.isReading) ACTION_STOP_READING else ACTION_START_READING
-        }
-        val togglePendingIntent = PendingIntent.getService(
+        val stopIntent = PendingIntent.getService(
             this,
             1,
-            toggleIntent,
+            Intent(this, ReadMeReadingService::class.java).apply {
+                action = ACTION_STOP_READING
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val actionTitle = if (sessionState.isReading) "Stop" else "Play"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
-            .setContentText(content)
-            .setSmallIcon(R.drawable.ic_readme_notification)
-            .setContentIntent(openAppPendingIntent)
-            .addAction(
-                if (sessionState.isReading) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
-                actionTitle,
-                togglePendingIntent
-            )
+            .setContentText(text)
+            .setContentIntent(openAppIntent)
+            .addAction(R.drawable.ic_launcher_foreground, "Stop", stopIntent)
             .setOngoing(sessionState.isReading)
-            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
 
@@ -424,6 +451,10 @@ class ReadMeReadingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        ReadMeCrashLogger.currentLifecycleState = "ServiceDestroyed"
+        if (BuildConfig.DEBUG) {
+            Log.d(TAG, "ReadMeReadingService onDestroy (ID: $serviceInstanceId)")
+        }
         bubbleController?.destroy()
         selectionController?.dismiss()
         highlightOverlayController?.destroy()
@@ -439,11 +470,14 @@ class ReadMeReadingService : Service() {
         val sessionState: ActiveReadingSessionState,
         val docState: ActiveDocumentState,
         val isForeground: Boolean,
+        val isDocumentPickerActive: Boolean,
         val settings: ReadMeSettings,
         val isClosedByUser: Boolean
     )
 
     companion object {
+        private const val TAG = "ReadMeReadingService"
+
         const val CHANNEL_ID = "readme_reading_playback_channel"
         const val NOTIFICATION_ID = 1001
 
@@ -475,17 +509,8 @@ class ReadMeReadingService : Service() {
             }
             try {
                 context.startService(intent)
-            } catch (e: IllegalStateException) {
-                // Background service restriction
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    try {
-                        context.startForegroundService(intent)
-                    } catch (e2: Exception) {
-                        // Ignore
-                    }
-                }
             } catch (e: Exception) {
-                // Ignore
+                Log.w(TAG, "Service sync from background postponed: ${e.message}")
             }
         }
     }

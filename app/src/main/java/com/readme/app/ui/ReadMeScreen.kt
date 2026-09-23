@@ -113,15 +113,15 @@ fun ReadMeScreen(
 
     var menuExpanded by remember { mutableStateOf(false) }
 
+    val context = LocalContext.current
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
+        com.readme.app.reading.service.ReadMeReadingSessionRuntime.getInstance(context.applicationContext).setDocumentPickerActive(false)
         if (uri != null) {
             viewModel.selectDocument(uri)
         }
     }
-
-    val context = LocalContext.current
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ ->
@@ -340,6 +340,7 @@ fun ReadMeScreen(
                                 ReadMeSecondaryButton(
                                     text = "Open File",
                                     onClick = {
+                                        com.readme.app.reading.service.ReadMeReadingSessionRuntime.getInstance(context.applicationContext).setDocumentPickerActive(true)
                                         filePickerLauncher.launch(
                                             arrayOf("text/plain", "application/epub+zip", "application/pdf")
                                         )
@@ -529,6 +530,7 @@ fun ReadMeScreen(
                             ReadMeSecondaryButton(
                                 text = "Open Document",
                                 onClick = {
+                                    com.readme.app.reading.service.ReadMeReadingSessionRuntime.getInstance(context.applicationContext).setDocumentPickerActive(true)
                                     filePickerLauncher.launch(
                                         arrayOf("text/plain", "application/epub+zip", "application/pdf")
                                     )

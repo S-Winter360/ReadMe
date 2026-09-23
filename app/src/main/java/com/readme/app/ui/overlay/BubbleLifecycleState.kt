@@ -13,7 +13,9 @@ enum class BubbleVisibilityState {
     HiddenByForeground,
     HiddenByUser,
     Disabled,
-    PermissionUnavailable
+    PermissionUnavailable,
+    OverlayUnavailable,
+    ServiceUnavailable
 }
 
 /**
@@ -41,12 +43,13 @@ object BubbleLifecyclePolicy {
         isFloatingEnabled: Boolean,
         hasOverlayPermission: Boolean,
         isForeground: Boolean,
-        isClosedByUser: Boolean
+        isClosedByUser: Boolean,
+        isDocumentPickerActive: Boolean = false
     ): BubbleVisibilityState {
         return when {
             !isFloatingEnabled -> BubbleVisibilityState.Disabled
             !hasOverlayPermission -> BubbleVisibilityState.PermissionUnavailable
-            isForeground -> BubbleVisibilityState.HiddenByForeground
+            isForeground || isDocumentPickerActive -> BubbleVisibilityState.HiddenByForeground
             isClosedByUser -> BubbleVisibilityState.HiddenByUser
             else -> BubbleVisibilityState.Visible
         }

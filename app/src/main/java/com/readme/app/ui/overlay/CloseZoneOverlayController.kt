@@ -43,6 +43,9 @@ class CloseZoneOverlayController(private val context: Context) {
     }
 
     fun show() {
+        if (!android.provider.Settings.canDrawOverlays(context)) return
+        val wm = windowManager ?: return
+
         if (dropZoneView == null) {
             dropZoneView = SystemFloatingBubbleView(context).apply {
                 composeView.setContent {
@@ -52,14 +55,12 @@ class CloseZoneOverlayController(private val context: Context) {
                 }
                 start()
             }
-        } else {
-            updateContent()
         }
 
         if (!isAdded) {
             try {
                 val params = createLayoutParams()
-                windowManager?.addView(dropZoneView, params)
+                wm.addView(dropZoneView, params)
                 isAdded = true
             } catch (e: Exception) {
                 isAdded = false
@@ -68,30 +69,24 @@ class CloseZoneOverlayController(private val context: Context) {
     }
 
     fun setHovered(hovered: Boolean) {
-        if (isHoveredState != hovered) {
-            isHoveredState = hovered
-            updateContent()
-        }
-    }
-
-    private fun updateContent() {
-        dropZoneView?.composeView?.setContent {
-            ReadMeTheme(darkTheme = true) {
-                CloseDropZoneContent(isHovered = isHoveredState)
-            }
-        }
+        isHoveredState = hovered
     }
 
     fun hide() {
         if (isAdded) {
+            val view = dropZoneView
             try {
-                dropZoneView?.stop()
-                windowManager?.removeView(dropZoneView)
+                view?.stop()
+                if (view != null) {
+                    windowManager?.removeView(view)
+                }
             } catch (e: Exception) {
                 // Ignore if already removed
             } finally {
                 isAdded = false
                 isHoveredState = false
+                view?.destroy()
+                dropZoneView = null
             }
         }
     }
