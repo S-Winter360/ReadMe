@@ -8,5 +8,6 @@ data class ReadMeSettings(
     val isSystemBubbleEnabled: Boolean = false,
     val isFloatingReadmeEnabled: Boolean = false,
     val isCrossAppReadingEnabled: Boolean = false,
-    val isScreenOcrConsentGranted: Boolean = false
+    val isScreenOcrConsentGranted: Boolean = false,
+    val isAutoAdvanceScreenReadingEnabled: Boolean = false
 )

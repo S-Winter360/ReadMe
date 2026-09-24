@@ -62,13 +62,34 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         setOf("com.android.systemui", packageName)
     }
 
+    private val _contentChangeEventFlow = kotlinx.coroutines.flow.MutableSharedFlow<AccessibilityEvent>(extraBufferCapacity = 16)
+    val contentChangeEventFlow: kotlinx.coroutines.flow.SharedFlow<AccessibilityEvent> = _contentChangeEventFlow
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString()
         if (!pkg.isNullOrBlank() && pkg !in IGNORED_SYSTEM_PACKAGES) {
             currentActivePackage = pkg
             _activePackageFlow.value = pkg
+
+            val type = event.eventType
+            if (type == AccessibilityEvent.TYPE_VIEW_SCROLLED ||
+                type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                type == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            ) {
+                _contentChangeEventFlow.tryEmit(event)
+            }
         }
+    }
+
+    fun getRootForTarget(target: CrossAppWindowTarget?): AccessibilityNodeInfo? {
+        if (target != null) {
+            val windowList = try { windows } catch (_: Throwable) { null }
+            val matchingWin = windowList?.firstOrNull { it.id == target.windowId }
+            val winRoot = try { matchingWin?.root } catch (_: Throwable) { null }
+            if (winRoot != null) return winRoot
+        }
+        return try { rootInActiveWindow } catch (_: Throwable) { null }
     }
 
     override fun onInterrupt() {

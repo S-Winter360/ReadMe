@@ -31,6 +31,7 @@ class ReadMeSettingsRepository(private val context: Context) {
         val FLOATING_README_ENABLED = booleanPreferencesKey("floating_readme_enabled")
         val CROSS_APP_READING_ENABLED = booleanPreferencesKey("cross_app_reading_enabled")
         val SCREEN_OCR_CONSENT_GRANTED = booleanPreferencesKey("screen_ocr_consent_granted")
+        val AUTO_ADVANCE_SCREEN_READING_ENABLED = booleanPreferencesKey("auto_advance_screen_reading_enabled")
     }
 
     val settingsFlow: Flow<ReadMeSettings> = context.dataStore.data
@@ -51,6 +52,7 @@ class ReadMeSettingsRepository(private val context: Context) {
                 ?: false
             val isCrossAppEnabled = preferences[PreferencesKeys.CROSS_APP_READING_ENABLED] ?: false
             val isOcrConsentGranted = preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] ?: false
+            val isAutoAdvanceEnabled = preferences[PreferencesKeys.AUTO_ADVANCE_SCREEN_READING_ENABLED] ?: false
 
             // Validate/clamp numeric values
             val clampedVolume = volume.coerceIn(0.0f, 1.0f)
@@ -65,7 +67,8 @@ class ReadMeSettingsRepository(private val context: Context) {
                 isSystemBubbleEnabled = isFloatingEnabled,
                 isFloatingReadmeEnabled = isFloatingEnabled,
                 isCrossAppReadingEnabled = isCrossAppEnabled,
-                isScreenOcrConsentGranted = isOcrConsentGranted
+                isScreenOcrConsentGranted = isOcrConsentGranted,
+                isAutoAdvanceScreenReadingEnabled = isAutoAdvanceEnabled
             )
         }
 
@@ -116,6 +119,12 @@ class ReadMeSettingsRepository(private val context: Context) {
     suspend fun updateScreenOcrConsentGranted(granted: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] = granted
+        }
+    }
+
+    suspend fun updateAutoAdvanceScreenReadingEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.AUTO_ADVANCE_SCREEN_READING_ENABLED] = enabled
         }
     }
 }

@@ -46,6 +46,7 @@ class ReadMeReadingService : Service() {
     private var bubbleController: SystemFloatingBubbleController? = null
     private var selectionController: ScreenRegionSelectionController? = null
     private var highlightOverlayController: ScreenHighlightOverlayController? = null
+    private var autoNavigationCoordinator: com.readme.app.accessibility.autonav.AutoNavigationCoordinator? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var lastSettings: ReadMeSettings = ReadMeSettings()
 
@@ -65,6 +66,11 @@ class ReadMeReadingService : Service() {
         bubbleController = SystemFloatingBubbleController(applicationContext)
         selectionController = ScreenRegionSelectionController(applicationContext)
         highlightOverlayController = ScreenHighlightOverlayController(applicationContext)
+        autoNavigationCoordinator = com.readme.app.accessibility.autonav.AutoNavigationCoordinator(
+            context = applicationContext,
+            sessionRuntime = sessionRuntime,
+            getHighlightOverlayController = { highlightOverlayController }
+        )
 
         val foregroundAndPickerFlow = combine(
             sessionRuntime.appForegroundState,
@@ -118,10 +124,42 @@ class ReadMeReadingService : Service() {
                 val docState = sessionRuntime.activeDocumentState.value
                 if (docState.isEphemeral && !docState.sourcePackageName.isNullOrBlank()) {
                     if (!activePkg.isNullOrBlank() && activePkg != packageName && activePkg != docState.sourcePackageName) {
-                        // User switched to another app: clear overlay highlight and stop ephemeral reading
+                        // User switched to another app: clear overlay highlight, cancel auto-advance, and stop ephemeral reading
+                        autoNavigationCoordinator?.reset()
                         sessionRuntime.stopReading()
                         highlightOverlayController?.clearHighlight()
                         sessionRuntime.discardEphemeralContext()
+                    }
+                }
+            }
+        }
+
+        serviceScope.launch {
+            combine(
+                sessionRuntime.readingSessionState,
+                sessionRuntime.activeDocumentState,
+                settingsRepo.settingsFlow
+            ) { sessionState, docState, settings ->
+                Triple(sessionState, docState, settings)
+            }.collect { (sessionState, docState, settings) ->
+                if (sessionState.isCompleted &&
+                    docState.isEphemeral &&
+                    settings.isAutoAdvanceScreenReadingEnabled &&
+                    settings.isCrossAppReadingEnabled
+                ) {
+                    val target = autoNavigationCoordinator?.currentTarget ?: ReadMeAccessibilityService.instance?.identifyTargetWindow()
+                    if (target != null) {
+                        val cycleResult = autoNavigationCoordinator?.attemptAutoAdvance(target, serviceScope)
+                        when (cycleResult) {
+                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.EndOfAccessibleContent,
+                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.ContentUnchanged -> {
+                                Toast.makeText(this@ReadMeReadingService, "End of accessible content", Toast.LENGTH_SHORT).show()
+                            }
+                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.Unavailable -> {
+                                Toast.makeText(this@ReadMeReadingService, "Automatic screen advance isn't available here.", Toast.LENGTH_SHORT).show()
+                            }
+                            else -> {}
+                        }
                     }
                 }
             }
@@ -221,30 +259,37 @@ class ReadMeReadingService : Service() {
                 activeDocumentState = state.docState,
                 crossAppReadingEnabled = state.settings.isCrossAppReadingEnabled,
                 canAcquireText = canAcquire,
+                isAutoAdvanceEnabled = state.settings.isAutoAdvanceScreenReadingEnabled,
                 onToggleReading = {
                     if (sessionRuntime.readingSessionState.value.isReading) {
+                        autoNavigationCoordinator?.cancelPendingNavigation()
                         sessionRuntime.pauseReading()
                     } else if (state.docState.isEphemeral && state.sessionState.isCompleted && state.docState.hasSuspendedPrimary) {
+                        autoNavigationCoordinator?.reset()
                         sessionRuntime.returnToPrimaryDocument()
                     } else if (state.docState.hasActiveDocument) {
                         sessionRuntime.resumeReading()
                     }
                 },
                 onPauseReading = {
+                    autoNavigationCoordinator?.cancelPendingNavigation()
                     sessionRuntime.pauseReading()
                 },
                 onResumeReading = {
                     sessionRuntime.resumeReading()
                 },
                 onReselectArea = {
+                    autoNavigationCoordinator?.reset()
                     handleReselectArea()
                 },
                 onStopReading = {
+                    autoNavigationCoordinator?.reset()
                     sessionRuntime.stopReading()
                     highlightOverlayController?.clearHighlight()
                     sessionRuntime.returnToPrimaryDocument()
                 },
                 onCloseBubble = {
+                    autoNavigationCoordinator?.reset()
                     sessionRuntime.closeBubbleByUser()
                 },
                 onAcquireMode = { mode ->
@@ -342,6 +387,11 @@ class ReadMeReadingService : Service() {
                 }
 
                 if (result is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.Success) {
+                    autoNavigationCoordinator?.onInitialOcrCompleted(
+                        documentText = result.document.allSegments().joinToString(" ") { it.text },
+                        region = selectedRegion,
+                        target = targetWindow
+                    )
                     sessionRuntime.loadEphemeralDocument(
                         document = result.document,
                         displayName = result.document.metadata.title,

@@ -270,6 +270,12 @@ class ReadMeViewModel @JvmOverloads constructor(
         }
     }
 
+    fun setAutoAdvanceScreenReadingEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateAutoAdvanceScreenReadingEnabled(enabled)
+        }
+    }
+
     fun reopenBubble() {
         sessionRuntime.reopenBubble()
         ReadMeReadingService.syncService(getApplication())

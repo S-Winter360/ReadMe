@@ -15,7 +15,12 @@ interface AccessibleNode {
     val isVisibleToUser: Boolean
     val isHeading: Boolean
     val className: CharSequence?
+    val isScrollable: Boolean get() = false
+    val isEnabled: Boolean get() = true
     val childCount: Int
+    fun getBoundsInScreen(outBounds: android.graphics.Rect) {}
+    fun availableActions(): List<Int> = emptyList()
+    fun performAction(actionId: Int): Boolean = false
     fun getChild(index: Int): AccessibleNode?
     fun recycle()
 }
@@ -36,7 +41,31 @@ class AndroidAccessibleNode(val node: AccessibilityNodeInfo) : AccessibleNode {
             false
         }
     override val className: CharSequence? get() = node.className
+    override val isScrollable: Boolean get() = node.isScrollable
+    override val isEnabled: Boolean get() = node.isEnabled
     override val childCount: Int get() = node.childCount
+
+    override fun getBoundsInScreen(outBounds: android.graphics.Rect) {
+        try {
+            node.getBoundsInScreen(outBounds)
+        } catch (_: Throwable) {}
+    }
+
+    override fun availableActions(): List<Int> {
+        return try {
+            node.actionList.map { it.id }
+        } catch (_: Throwable) {
+            emptyList()
+        }
+    }
+
+    override fun performAction(actionId: Int): Boolean {
+        return try {
+            node.performAction(actionId)
+        } catch (_: Throwable) {
+            false
+        }
+    }
 
     override fun getChild(index: Int): AccessibleNode? {
         val child = node.getChild(index) ?: return null

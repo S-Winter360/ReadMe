@@ -39,15 +39,15 @@ class ScreenHighlightOverlayController(private val context: Context) {
     private var currentRects: List<RectF> = emptyList()
     private var previousRects: List<RectF> = emptyList()
 
-    private var pulseAlpha: Float = 0.28f
+    private var pulseAlpha: Float = 0.20f
     private var pulseAnimator: ValueAnimator? = null
 
     private var transitionProgress: Float = 1.0f
     private var transitionAnimator: ValueAnimator? = null
 
     init {
-        pulseAnimator = ValueAnimator.ofFloat(0.20f, 0.36f).apply {
-            duration = 1400
+        pulseAnimator = ValueAnimator.ofFloat(0.16f, 0.24f).apply {
+            duration = 1600
             repeatMode = ValueAnimator.REVERSE
             repeatCount = ValueAnimator.INFINITE
             interpolator = AccelerateDecelerateInterpolator()
@@ -142,12 +142,12 @@ class ScreenHighlightOverlayController(private val context: Context) {
             private val strokePaint = Paint().apply {
                 isAntiAlias = true
                 style = Paint.Style.STROKE
-                strokeWidth = 2.5f
+                strokeWidth = 1.5f
             }
             private val glowPaint = Paint().apply {
                 isAntiAlias = true
                 style = Paint.Style.STROKE
-                strokeWidth = 8f
+                strokeWidth = 5f
             }
 
             override fun onConfigurationChanged(newConfig: Configuration?) {
@@ -175,26 +175,28 @@ class ScreenHighlightOverlayController(private val context: Context) {
 
             private fun drawRectangles(canvas: Canvas, rects: List<RectF>, alphaMultiplier: Float) {
                 val fillAlpha = (pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
-                val strokeAlpha = (0.55f * alphaMultiplier * 255).toInt().coerceIn(0, 255)
-                val glowAlpha = (0.22f * pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
+                val strokeAlpha = (0.42f * alphaMultiplier * 255).toInt().coerceIn(0, 255)
+                val glowAlpha = (0.16f * pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
 
-                fillPaint.color = Color.argb(fillAlpha, 0, 180, 216)      // Translucent teal fill
-                strokePaint.color = Color.argb(strokeAlpha, 0, 180, 216)  // Delicate crisp border
-                glowPaint.color = Color.argb(glowAlpha, 0, 180, 216)      // Soft outer ambient halo
+                // Deep translucent teal/mint (#12A096 / #14B8A6)
+                fillPaint.color = Color.argb(fillAlpha, 18, 160, 150)
+                strokePaint.color = Color.argb(strokeAlpha, 20, 184, 166)
+                glowPaint.color = Color.argb(glowAlpha, 45, 212, 191)
 
+                val cornerRadius = 6f
                 for (rect in rects) {
                     val padded = RectF(
-                        rect.left - 4f,
-                        rect.top - 2f,
-                        rect.right + 4f,
-                        rect.bottom + 2f
+                        rect.left - 2f,
+                        rect.top - 1f,
+                        rect.right + 2f,
+                        rect.bottom + 1f
                     )
                     // Draw outer soft glow halo
-                    canvas.drawRoundRect(padded, 8f, 8f, glowPaint)
+                    canvas.drawRoundRect(padded, cornerRadius, cornerRadius, glowPaint)
                     // Draw translucent fill
-                    canvas.drawRoundRect(padded, 8f, 8f, fillPaint)
+                    canvas.drawRoundRect(padded, cornerRadius, cornerRadius, fillPaint)
                     // Draw delicate subtle border
-                    canvas.drawRoundRect(padded, 8f, 8f, strokePaint)
+                    canvas.drawRoundRect(padded, cornerRadius, cornerRadius, strokePaint)
                 }
             }
         }

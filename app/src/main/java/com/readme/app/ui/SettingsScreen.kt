@@ -335,6 +335,43 @@ fun SettingsScreen(
                 }
             }
 
+            // 3. Automatic screen advance Switch
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                        Text(
+                            text = "Automatic screen advance",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Automatically move to the next page or scroll when the current screen content has been read.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = settings.isAutoAdvanceScreenReadingEnabled,
+                        onCheckedChange = { checked ->
+                            viewModel.setAutoAdvanceScreenReadingEnabled(checked)
+                        },
+                        modifier = Modifier
+                            .semantics {
+                                this.contentDescription = "Automatic screen advance, switch"
+                            }
+                            .testTag("setting_auto_advance_switch")
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
 
             if (com.readme.app.BuildConfig.DEBUG) {

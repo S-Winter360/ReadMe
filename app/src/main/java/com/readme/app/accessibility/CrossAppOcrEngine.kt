@@ -182,124 +182,16 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
 
             val (blocksList, linesList) = extractHierarchyReflectively(result, bitmap.width, bitmap.height)
 
-            val sentencesList = mutableListOf<CrossAppOcrSentence>()
-            if (normalized.isNotBlank()) {
-                val sentences = TxtDocumentParser.splitIntoSentences(normalized)
-
-                if (linesList.isNotEmpty()) {
-                    // Geometry mapping: assign OCR lines and word elements directly to sentences
-                    var currentLineIdx = 0
-                    for (s in sentences) {
-                        val trimmed = s.trim()
-                        if (trimmed.isBlank()) continue
-
-                        val sentenceWords = trimmed.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
-                        val sentenceLineRects = mutableListOf<RectF>()
-                        var matchedWordsCount = 0
-
-                        val scanStartLine = currentLineIdx
-                        var lineIdx = scanStartLine
-                        while (lineIdx < linesList.size && matchedWordsCount < sentenceWords.size) {
-                            val line = linesList[lineIdx]
-                            val lineWords = line.text.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
-
-                            // Check if line contains words belonging to this sentence
-                            val matchingInThisLine = lineWords.count { word ->
-                                sentenceWords.any { it.contains(word) || word.contains(it) }
-                            }
-
-                            if (matchingInThisLine > 0) {
-                                sentenceLineRects.add(line.bounds)
-                                matchedWordsCount += matchingInThisLine
-                                currentLineIdx = lineIdx
-                            } else if (sentenceLineRects.isNotEmpty()) {
-                                // We already started matching lines for this sentence, but this line has none: stop
-                                break
-                            }
-                            lineIdx++
-                        }
-
-                        // If line matching yielded results, use them; otherwise fallback to search bounds
-                        if (sentenceLineRects.isNotEmpty()) {
-                            val unionBounds = RectF(sentenceLineRects.first())
-                            sentenceLineRects.forEach { unionBounds.union(it) }
-                            sentencesList.add(
-                                CrossAppOcrSentence(
-                                    text = trimmed,
-                                    bounds = unionBounds,
-                                    lineBounds = sentenceLineRects
-                                )
-                            )
-                        } else {
-                            // Fallback to getSearchBounds
-                            val searchMatches = try {
-                                result?.getSearchBounds(trimmed, false)
-                            } catch (_: Throwable) {
-                                null
-                            }
-                            val matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
-                            val unionBounds = if (matchRects.isNotEmpty()) {
-                                val union = RectF(matchRects.first())
-                                matchRects.forEach { union.union(it) }
-                                union
-                            } else {
-                                RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
-                            }
-                            sentencesList.add(
-                                CrossAppOcrSentence(
-                                    text = trimmed,
-                                    bounds = unionBounds,
-                                    lineBounds = matchRects.ifEmpty { listOf(unionBounds) }
-                                )
-                            )
-                        }
-                    }
-                } else {
-                    // Fallback when ML Kit Text field is not accessible
-                    for (s in sentences) {
-                        val trimmed = s.trim()
-                        if (trimmed.isNotBlank()) {
-                            val searchMatches = try {
-                                result?.getSearchBounds(trimmed, false)
-                            } catch (_: Throwable) {
-                                null
-                            }
-                            var matchRects = searchMatches?.firstOrNull()?.map { RectF(it) } ?: emptyList()
-
-                            if (matchRects.isEmpty() && trimmed.length > 5) {
-                                val words = trimmed.split(Regex("\\s+")).filter { it.length >= 3 }
-                                val wordRects = mutableListOf<RectF>()
-                                for (w in words.take(6)) {
-                                    try {
-                                        val wb = result?.getSearchBounds(w, false)
-                                        val r = wb?.firstOrNull()?.map { RectF(it) }
-                                        if (!r.isNullOrEmpty()) {
-                                            wordRects.addAll(r)
-                                        }
-                                    } catch (_: Throwable) {}
-                                }
-                                if (wordRects.isNotEmpty()) {
-                                    matchRects = wordRects
-                                }
-                            }
-
-                            val unionBounds = if (matchRects.isNotEmpty()) {
-                                val union = RectF(matchRects.first())
-                                matchRects.forEach { union.union(it) }
-                                union
-                            } else {
-                                RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat())
-                            }
-                            sentencesList.add(
-                                CrossAppOcrSentence(
-                                    text = trimmed,
-                                    bounds = unionBounds,
-                                    lineBounds = matchRects
-                                )
-                            )
-                        }
-                    }
-                }
+            val sentencesList = if (normalized.isNotBlank()) {
+                OcrSentenceGeometryMapper.mapSentencesWithTightBounds(
+                    blocks = blocksList,
+                    lines = linesList,
+                    rawOcrText = normalized,
+                    bitmapWidth = bitmap.width,
+                    bitmapHeight = bitmap.height
+                )
+            } else {
+                emptyList()
             }
 
             CrossAppOcrResult(

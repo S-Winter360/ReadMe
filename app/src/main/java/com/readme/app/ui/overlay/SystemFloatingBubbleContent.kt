@@ -68,6 +68,7 @@ fun SystemFloatingBubbleContent(
     activeDocumentState: ActiveDocumentState,
     crossAppReadingEnabled: Boolean = true,
     canAcquireText: Boolean = false,
+    isAutoAdvanceEnabled: Boolean = false,
     onToggleReading: () -> Unit = {},
     onPauseReading: () -> Unit = {},
     onResumeReading: () -> Unit = {},
@@ -219,6 +220,24 @@ fun SystemFloatingBubbleContent(
                                     onStopReading()
                                 }
                             )
+
+                            // Auto-advance indicator badge
+                            if (activeDocumentState.isEphemeral && isAutoAdvanceEnabled) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                    modifier = Modifier
+                                        .padding(horizontal = 4.dp)
+                                        .testTag("bubble_auto_advance_badge")
+                                ) {
+                                    Text(
+                                        text = "Auto-advance ON",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                         } else {
                             // Idle cross-app acquisition controls
                             if (crossAppReadingEnabled) {
