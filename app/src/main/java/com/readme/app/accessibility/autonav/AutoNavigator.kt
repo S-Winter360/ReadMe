@@ -63,20 +63,21 @@ object AutoNavigator {
         val node: AccessibleNode,
         val actionType: NavigationActionType,
         val actionId: Int,
+        val fallbackActions: List<Pair<NavigationActionType, Int>> = emptyList(),
         val bounds: Rect,
         val className: String,
         val score: Int
     )
 
     /**
-     * Traverses the accessibility node tree starting from [root], identifying the best candidate
-     * scrollable/paged container node and selecting its best advance action.
+     * Traverses the accessibility node tree starting from [root], identifying candidate
+     * scrollable/paged container nodes ranked by suitability.
      */
-    fun findBestCandidate(
+    fun findCandidates(
         root: AccessibleNode?,
         readingRegion: Rect?
-    ): CandidateNode? {
-        if (root == null) return null
+    ): List<CandidateNode> {
+        if (root == null) return emptyList()
 
         val candidates = mutableListOf<CandidateNode>()
         val queue = ArrayDeque<AccessibleNode>()
@@ -106,34 +107,51 @@ object AutoNavigator {
             }
         }
 
-        // Return candidate with highest score
-        return candidates.maxByOrNull { it.score }
+        return candidates.sortedByDescending { it.score }
+    }
+
+    /**
+     * Traverses the accessibility node tree starting from [root], identifying the best candidate
+     * scrollable/paged container node and selecting its best advance action.
+     */
+    fun findBestCandidate(
+        root: AccessibleNode?,
+        readingRegion: Rect?
+    ): CandidateNode? {
+        return findCandidates(root, readingRegion).firstOrNull()
     }
 
     /**
      * Dispatches the navigation action on the best candidate node in the tree.
+     * If the primary candidate or action is rejected, attempts fallback actions or candidates.
      */
     fun executeNavigation(
         root: AccessibleNode?,
         readingRegion: Rect?
     ): AutoAdvanceActionResult {
-        val candidate = findBestCandidate(root, readingRegion)
-            ?: return AutoAdvanceActionResult.NoCandidateNodeFound
-
-        val actionSucceeded = try {
-            candidate.node.performAction(candidate.actionId)
-        } catch (e: Throwable) {
-            return AutoAdvanceActionResult.Error(e.message ?: "Action invocation threw exception")
+        val candidates = findCandidates(root, readingRegion)
+        if (candidates.isEmpty()) {
+            return AutoAdvanceActionResult.NoCandidateNodeFound
         }
 
-        return if (actionSucceeded) {
-            AutoAdvanceActionResult.Dispatched(
-                actionType = candidate.actionType.name,
-                nodeClass = candidate.className
-            )
-        } else {
-            AutoAdvanceActionResult.ActionRejectedByNode
+        for (candidate in candidates.take(3)) {
+            val actionsToTry = listOf(candidate.actionType to candidate.actionId) + candidate.fallbackActions
+            for ((actionType, actionId) in actionsToTry) {
+                try {
+                    val actionSucceeded = candidate.node.performAction(actionId)
+                    if (actionSucceeded) {
+                        return AutoAdvanceActionResult.Dispatched(
+                            actionType = actionType.name,
+                            nodeClass = candidate.className
+                        )
+                    }
+                } catch (e: Throwable) {
+                    // Try next action/candidate
+                }
+            }
         }
+
+        return AutoAdvanceActionResult.ActionRejectedByNode
     }
 
     private fun evaluateNodeForAction(
@@ -144,59 +162,61 @@ object AutoNavigator {
     ): CandidateNode? {
         val actionSet = actions.toSet()
 
-        // 1. Identify available action with preference:
-        // Paged Reader -> ACTION_PAGE_RIGHT, ACTION_PAGE_DOWN
-        // Scroll Reader -> ACTION_SCROLL_DOWN, ACTION_SCROLL_FORWARD
-        // Alternate -> ACTION_PAGE_LEFT, ACTION_SCROLL_RIGHT
-        val matchedAction: Pair<NavigationActionType, Int>? = when {
-            actionSet.contains(ID_PAGE_RIGHT) -> NavigationActionType.PAGE_RIGHT to ID_PAGE_RIGHT
-            actionSet.contains(ID_PAGE_DOWN) -> NavigationActionType.PAGE_DOWN to ID_PAGE_DOWN
-            actionSet.contains(ID_SCROLL_DOWN) -> NavigationActionType.SCROLL_DOWN to ID_SCROLL_DOWN
-            actionSet.contains(ID_SCROLL_FORWARD) -> NavigationActionType.SCROLL_FORWARD to ID_SCROLL_FORWARD
-            actionSet.contains(ID_SCROLL_RIGHT) -> NavigationActionType.SCROLL_RIGHT to ID_SCROLL_RIGHT
-            actionSet.contains(ID_PAGE_LEFT) -> NavigationActionType.PAGE_LEFT to ID_PAGE_LEFT
-            actionSet.contains(ID_PAGE_UP) -> NavigationActionType.PAGE_UP to ID_PAGE_UP
-            else -> null
-        }
+        // Discover viable forward-advance actions in order of reading preference:
+        val viableActions = mutableListOf<Pair<NavigationActionType, Int>>()
+        if (actionSet.contains(ID_PAGE_RIGHT)) viableActions.add(NavigationActionType.PAGE_RIGHT to ID_PAGE_RIGHT)
+        if (actionSet.contains(ID_PAGE_DOWN)) viableActions.add(NavigationActionType.PAGE_DOWN to ID_PAGE_DOWN)
+        if (actionSet.contains(ID_SCROLL_DOWN)) viableActions.add(NavigationActionType.SCROLL_DOWN to ID_SCROLL_DOWN)
+        if (actionSet.contains(ID_SCROLL_FORWARD)) viableActions.add(NavigationActionType.SCROLL_FORWARD to ID_SCROLL_FORWARD)
+        if (actionSet.contains(ID_SCROLL_RIGHT)) viableActions.add(NavigationActionType.SCROLL_RIGHT to ID_SCROLL_RIGHT)
+        if (actionSet.contains(ID_PAGE_LEFT)) viableActions.add(NavigationActionType.PAGE_LEFT to ID_PAGE_LEFT)
+        if (actionSet.contains(ID_PAGE_UP)) viableActions.add(NavigationActionType.PAGE_UP to ID_PAGE_UP)
 
-        if (matchedAction == null) return null
+        if (viableActions.isEmpty()) return null
+
+        val primaryAction = viableActions.first()
+        val fallbacks = viableActions.drop(1)
 
         val className = node.className?.toString() ?: ""
+        val lowerClass = className.lowercase()
         var score = 10
 
-        // Explicitly marked scrollable
+        // Explicitly marked scrollable containers get a massive priority boost
         if (node.isScrollable) {
-            score += 30
+            score += 40
         }
 
-        // Paging actions are given higher priority for reading apps
-        when (matchedAction.first) {
-            NavigationActionType.PAGE_RIGHT, NavigationActionType.PAGE_DOWN -> score += 40
-            NavigationActionType.SCROLL_DOWN, NavigationActionType.SCROLL_FORWARD -> score += 25
+        // Paging vs scrolling actions
+        when (primaryAction.first) {
+            NavigationActionType.PAGE_RIGHT, NavigationActionType.PAGE_DOWN -> score += 35
+            NavigationActionType.SCROLL_FORWARD, NavigationActionType.SCROLL_DOWN -> score += 30
             else -> score += 10
         }
 
-        // Region containment/overlap: strongly favor container containing the reading region
-        if (readingRegion != null && !readingRegion.isEmpty && !nodeBounds.isEmpty) {
-            if (nodeBounds.contains(readingRegion)) {
-                score += 50
-            } else if (Rect.intersects(nodeBounds, readingRegion)) {
-                score += 25
-            }
+        // Favor prominent reading containers based on class name
+        if (lowerClass.contains("viewpager") || lowerClass.contains("reader") || lowerClass.contains("pager")) {
+            score += 45
+        } else if (lowerClass.contains("recyclerview") || lowerClass.contains("scrollview") || lowerClass.contains("webview") || lowerClass.contains("adapterview") || lowerClass.contains("listview")) {
+            score += 35
+        } else if (!node.isScrollable && (lowerClass.contains("textview") || lowerClass.contains("text") || lowerClass.contains("image"))) {
+            // Static leaf block with spurious actions: penalize heavily so true containers win
+            score -= 50
         }
 
-        // Favor prominent reading containers based on class name
-        val lowerClass = className.lowercase()
-        if (lowerClass.contains("viewpager") || lowerClass.contains("reader") || lowerClass.contains("pager")) {
-            score += 35
-        } else if (lowerClass.contains("recyclerview") || lowerClass.contains("scrollview") || lowerClass.contains("webview")) {
-            score += 20
+        // Region containment/overlap: favor container containing or overlapping the reading region
+        if (readingRegion != null && !readingRegion.isEmpty && !nodeBounds.isEmpty) {
+            if (nodeBounds.contains(readingRegion)) {
+                score += 30
+            } else if (Rect.intersects(nodeBounds, readingRegion)) {
+                score += 15
+            }
         }
 
         return CandidateNode(
             node = node,
-            actionType = matchedAction.first,
-            actionId = matchedAction.second,
+            actionType = primaryAction.first,
+            actionId = primaryAction.second,
+            fallbackActions = fallbacks,
             bounds = nodeBounds,
             className = className,
             score = score

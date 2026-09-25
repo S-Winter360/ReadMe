@@ -174,6 +174,13 @@ class ScreenHighlightOverlayController(private val context: Context) {
             }
 
             private fun drawRectangles(canvas: Canvas, rects: List<RectF>, alphaMultiplier: Float) {
+                val loc = IntArray(2)
+                try {
+                    getLocationOnScreen(loc)
+                } catch (_: Throwable) {}
+                val viewX = loc[0].toFloat()
+                val viewY = loc[1].toFloat()
+
                 val fillAlpha = (pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
                 val strokeAlpha = (0.42f * alphaMultiplier * 255).toInt().coerceIn(0, 255)
                 val glowAlpha = (0.16f * pulseAlpha * alphaMultiplier * 255).toInt().coerceIn(0, 255)
@@ -185,11 +192,16 @@ class ScreenHighlightOverlayController(private val context: Context) {
 
                 val cornerRadius = 6f
                 for (rect in rects) {
+                    val localLeft = rect.left - viewX
+                    val localTop = rect.top - viewY
+                    val localRight = rect.right - viewX
+                    val localBottom = rect.bottom - viewY
+
                     val padded = RectF(
-                        rect.left - 2f,
-                        rect.top - 1f,
-                        rect.right + 2f,
-                        rect.bottom + 1f
+                        localLeft - 2f,
+                        localTop - 1f,
+                        localRight + 2f,
+                        localBottom + 1f
                     )
                     // Draw outer soft glow halo
                     canvas.drawRoundRect(padded, cornerRadius, cornerRadius, glowPaint)
@@ -219,6 +231,15 @@ class ScreenHighlightOverlayController(private val context: Context) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } else {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
         }
 
         try {

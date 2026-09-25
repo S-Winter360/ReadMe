@@ -473,6 +473,13 @@ object CrossAppOcrCoordinator {
                     }
 
                     // Record comprehensive diagnostics in-memory for success
+                    val firstCropBounds = ocrResult.sentences.firstOrNull()?.bounds?.let {
+                        "[l=${it.left.toInt()}, t=${it.top.toInt()}, r=${it.right.toInt()}, b=${it.bottom.toInt()}]"
+                    } ?: ""
+                    val firstScreenBounds = mappedSentences.firstOrNull()?.bounds?.let {
+                        "[l=${it.left.toInt()}, t=${it.top.toInt()}, r=${it.right.toInt()}, b=${it.bottom.toInt()}]"
+                    } ?: ""
+
                     ScreenOcrDiagnostics.record(
                         ScreenOcrDiagnosticRecord(
                             targetPackageName = target.packageName,
@@ -498,6 +505,9 @@ object CrossAppOcrCoordinator {
                             ocrUpscaleFactor = ocrUpscaleFactor,
                             ocrTextLength = ocrResult.text.length,
                             ocrSentenceCount = ocrResult.sentences.size,
+                            originMode = originMode.name,
+                            firstSentenceCropBounds = firstCropBounds,
+                            firstHighlightBounds = firstScreenBounds,
                             acquisitionResultType = "Success",
                             errorReason = null
                         )

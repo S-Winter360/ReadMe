@@ -51,6 +51,7 @@ class ScreenRegionSelectionController(private val context: Context) {
     @SuppressLint("ClickableViewAccessibility")
     fun show(
         windowBounds: Rect? = null,
+        initialSelection: Rect? = null,
         onRegionSelected: (Rect) -> Unit,
         onCancelled: () -> Unit
     ) {
@@ -68,30 +69,21 @@ class ScreenRegionSelectionController(private val context: Context) {
             return
         }
 
+        val realBounds = ScreenGeometryMapper.getRealDisplayBounds(context)
+        val screenW = realBounds.width().coerceAtLeast(720)
+        val screenH = realBounds.height().coerceAtLeast(1280)
         val dm = context.resources.displayMetrics
-        var screenW = dm.widthPixels.coerceAtLeast(720)
-        var screenH = dm.heightPixels.coerceAtLeast(1280)
-        try {
-            val realDm = DisplayMetrics()
-            @Suppress("DEPRECATION")
-            wm.defaultDisplay?.getRealMetrics(realDm)
-            if (realDm.widthPixels > 0 && realDm.heightPixels > 0) {
-                screenW = realDm.widthPixels
-                screenH = realDm.heightPixels
-            }
-        } catch (_: Throwable) {
-            // Keep resources.displayMetrics
-        }
 
         val effectiveBounds = windowBounds?.takeIf { !it.isEmpty }
             ?: Rect(0, 0, screenW, screenH)
 
-        // Initialize selection rectangle centered in effective bounds
-        val initW = (effectiveBounds.width() * 0.75f).toInt().coerceAtLeast(ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
-        val initH = (effectiveBounds.height() * 0.35f).toInt().coerceAtLeast(ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
-        val initL = effectiveBounds.left + (effectiveBounds.width() - initW) / 2
-        val initT = effectiveBounds.top + (effectiveBounds.height() - initH) / 2
-        val currentRect = Rect(initL, initT, initL + initW, initT + initH)
+        // Initialize selection rectangle: restore previous selection if valid; otherwise default centered
+        val currentRect = if (initialSelection != null && !initialSelection.isEmpty) {
+            val norm = ScreenGeometryMapper.normalizeRect(initialSelection)
+            ScreenGeometryMapper.clampRegion(norm, effectiveBounds) ?: createDefaultSelection(effectiveBounds)
+        } else {
+            createDefaultSelection(effectiveBounds)
+        }
 
         val root = FrameLayout(themedContext).apply {
             setBackgroundColor(Color.TRANSPARENT)
@@ -243,13 +235,24 @@ class ScreenRegionSelectionController(private val context: Context) {
             isClickable = true
             isFocusable = true
             setOnClickListener {
-                val clamped = ScreenGeometryMapper.clampRegion(currentRect, effectiveBounds)
-                dismiss()
-                if (clamped != null) {
-                    onRegionSelected(clamped)
+                val loc = IntArray(2)
+                try {
+                    canvasView.getLocationOnScreen(loc)
+                } catch (_: Throwable) {}
+                val norm = ScreenGeometryMapper.normalizeRect(currentRect)
+                val onScreen = if (loc[0] != 0 || loc[1] != 0) {
+                    Rect(
+                        norm.left + loc[0],
+                        norm.top + loc[1],
+                        norm.right + loc[0],
+                        norm.bottom + loc[1]
+                    )
                 } else {
-                    onCancelled()
+                    norm
                 }
+                val clamped = ScreenGeometryMapper.clampRegion(onScreen, effectiveBounds) ?: onScreen
+                dismiss()
+                onRegionSelected(clamped)
             }
         }
 
@@ -381,6 +384,15 @@ class ScreenRegionSelectionController(private val context: Context) {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } else {
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+            }
         }
 
         try {
@@ -396,6 +408,14 @@ class ScreenRegionSelectionController(private val context: Context) {
             overlayView = null
             onCancelled()
         }
+    }
+
+    private fun createDefaultSelection(bounds: Rect): Rect {
+        val initW = (bounds.width() * 0.75f).toInt().coerceAtLeast(ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
+        val initH = (bounds.height() * 0.35f).toInt().coerceAtLeast(ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
+        val initL = bounds.left + (bounds.width() - initW) / 2
+        val initT = bounds.top + (bounds.height() - initH) / 2
+        return Rect(initL, initT, initL + initW, initT + initH)
     }
 
     fun dismiss() {

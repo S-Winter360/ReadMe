@@ -49,6 +49,7 @@ class ReadMeReadingService : Service() {
     private var autoNavigationCoordinator: com.readme.app.accessibility.autonav.AutoNavigationCoordinator? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var lastSettings: ReadMeSettings = ReadMeSettings()
+    private var lastUserSelectedRegion: android.graphics.Rect? = null
 
     private val notificationManager by lazy {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -318,7 +319,10 @@ class ReadMeReadingService : Service() {
                 val targetWindow = service?.identifyTargetWindow()
                 selectionController?.show(
                     windowBounds = targetWindow?.windowBounds,
+                    initialSelection = lastUserSelectedRegion,
                     onRegionSelected = { selectedRegion ->
+                        lastUserSelectedRegion = selectedRegion
+                        autoNavigationCoordinator?.lastSelectedRegion = selectedRegion
                         executeAcquisitionFlow(mode, selectedRegion)
                     },
                     onCancelled = {
@@ -367,7 +371,7 @@ class ReadMeReadingService : Service() {
                 val targetWindow = service?.identifyTargetWindow()
                 val appLabel = targetPkg?.let { getApplicationLabel(it) } ?: targetWindow?.let { getApplicationLabel(it.packageName) }
                 val ocrEngine = if (mode == CrossAppAcquisitionMode.SCREEN_OCR) com.readme.app.accessibility.OnDeviceCrossAppOcrEngine() else null
-                val displayMetrics = resources.displayMetrics
+                val realDisplayBounds = com.readme.app.accessibility.ScreenGeometryMapper.getRealDisplayBounds(this@ReadMeReadingService)
 
                 val result = try {
                     com.readme.app.accessibility.CrossAppReadingCoordinator.acquire(
@@ -379,8 +383,8 @@ class ReadMeReadingService : Service() {
                         target = targetWindow,
                         appLabel = appLabel,
                         selectedRegion = selectedRegion,
-                        displayWidth = displayMetrics.widthPixels,
-                        displayHeight = displayMetrics.heightPixels
+                        displayWidth = realDisplayBounds.width(),
+                        displayHeight = realDisplayBounds.height()
                     )
                 } finally {
                     ocrEngine?.close()

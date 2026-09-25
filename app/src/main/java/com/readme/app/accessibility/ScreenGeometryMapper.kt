@@ -1,7 +1,11 @@
 package com.readme.app.accessibility
 
+import android.content.Context
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
+import android.util.DisplayMetrics
+import android.view.WindowManager
 import kotlin.math.roundToInt
 
 // =========================================================================
@@ -10,8 +14,8 @@ import kotlin.math.roundToInt
 
 /** 1. Coordinates in the overall physical display space [0, 0, displayWidth, displayHeight]. */
 data class DisplayCoordinatesRect(val rect: Rect) {
-    val width: Int get() = rect.width()
-    val height: Int get() = rect.height()
+    val width: Int get() = rect.right - rect.left
+    val height: Int get() = rect.bottom - rect.top
     val left: Int get() = rect.left
     val top: Int get() = rect.top
     val right: Int get() = rect.right
@@ -20,8 +24,8 @@ data class DisplayCoordinatesRect(val rect: Rect) {
 
 /** 2. Target accessibility window bounds on screen [winLeft, winTop, winRight, winBottom]. */
 data class AccessibilityWindowRect(val rect: Rect) {
-    val width: Int get() = rect.width()
-    val height: Int get() = rect.height()
+    val width: Int get() = rect.right - rect.left
+    val height: Int get() = rect.bottom - rect.top
     val left: Int get() = rect.left
     val top: Int get() = rect.top
     val right: Int get() = rect.right
@@ -30,8 +34,8 @@ data class AccessibilityWindowRect(val rect: Rect) {
 
 /** 3. Selection overlay coordinates (origin at (0,0) of display due to FLAG_LAYOUT_IN_SCREEN). */
 data class SelectionOverlayRect(val rect: Rect) {
-    val width: Int get() = rect.width()
-    val height: Int get() = rect.height()
+    val width: Int get() = rect.right - rect.left
+    val height: Int get() = rect.bottom - rect.top
     val left: Int get() = rect.left
     val top: Int get() = rect.top
     val right: Int get() = rect.right
@@ -40,8 +44,8 @@ data class SelectionOverlayRect(val rect: Rect) {
 
 /** 4. Screenshot pixel coordinates in captured bitmap [0, 0, bitmapWidth, bitmapHeight]. */
 data class ScreenshotPixelRect(val rect: Rect) {
-    val width: Int get() = rect.width()
-    val height: Int get() = rect.height()
+    val width: Int get() = rect.right - rect.left
+    val height: Int get() = rect.bottom - rect.top
     val left: Int get() = rect.left
     val top: Int get() = rect.top
     val right: Int get() = rect.right
@@ -50,8 +54,8 @@ data class ScreenshotPixelRect(val rect: Rect) {
 
 /** 5. Cropped bitmap pixel coordinates [0, 0, cropWidth, cropHeight]. */
 data class CroppedBitmapRect(val rect: Rect) {
-    val width: Int get() = rect.width()
-    val height: Int get() = rect.height()
+    val width: Int get() = rect.right - rect.left
+    val height: Int get() = rect.bottom - rect.top
     val left: Int get() = rect.left
     val top: Int get() = rect.top
     val right: Int get() = rect.right
@@ -72,6 +76,38 @@ object ScreenGeometryMapper {
 
     const val DEFAULT_MIN_SIZE_PX = 24
     const val DEFAULT_RECOMMENDED_MIN_OCR_PX = 48
+
+    /**
+     * Resolves the true physical display bounds in pixels regardless of window insets,
+     * status bars, navigation bars, or display cutouts.
+     */
+    fun getRealDisplayBounds(context: Context): Rect {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (wm != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    val bounds = wm.maximumWindowMetrics.bounds
+                    if (bounds.width() > 0 && bounds.height() > 0) {
+                        return Rect(0, 0, bounds.width(), bounds.height())
+                    }
+                } catch (_: Throwable) {}
+            }
+            try {
+                @Suppress("DEPRECATION")
+                val display = wm.defaultDisplay
+                if (display != null) {
+                    val realDm = DisplayMetrics()
+                    @Suppress("DEPRECATION")
+                    display.getRealMetrics(realDm)
+                    if (realDm.widthPixels > 0 && realDm.heightPixels > 0) {
+                        return Rect(0, 0, realDm.widthPixels, realDm.heightPixels)
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+        val dm = context.resources.displayMetrics
+        return Rect(0, 0, dm.widthPixels, dm.heightPixels)
+    }
 
     fun makeRect(l: Int, t: Int, r: Int, b: Int): Rect {
         val rect = Rect()
@@ -166,8 +202,8 @@ object ScreenGeometryMapper {
         displayHeight: Int = 0
     ): ScreenshotOriginMode {
         val normWindow = normalizeRect(windowBounds)
-        val winW = normWindow.width().coerceAtLeast(1)
-        val winH = normWindow.height().coerceAtLeast(1)
+        val winW = (normWindow.right - normWindow.left).coerceAtLeast(1)
+        val winH = (normWindow.bottom - normWindow.top).coerceAtLeast(1)
 
         // 1. Exact match with display dimensions
         if (displayWidth > 0 && displayHeight > 0) {
