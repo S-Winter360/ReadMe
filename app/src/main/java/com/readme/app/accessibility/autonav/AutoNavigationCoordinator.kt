@@ -2,6 +2,7 @@ package com.readme.app.accessibility.autonav
 
 import android.content.Context
 import android.graphics.Rect
+import android.view.accessibility.AccessibilityEvent
 import com.readme.app.accessibility.AndroidAccessibleNode
 import com.readme.app.accessibility.CrossAppOcrAcquisitionResult
 import com.readme.app.accessibility.CrossAppOcrCoordinator
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -111,147 +113,229 @@ class AutoNavigationCoordinator(
             }
 
             val wrappedRoot = AndroidAccessibleNode(rawRoot)
-            val actionResult = AutoNavigator.executeNavigation(wrappedRoot, lastSelectedRegion)
+            val allCandidates = AutoNavigator.findCandidates(wrappedRoot, lastSelectedRegion)
+            val validCandidates = allCandidates.filter { it.isGeometryValid }
 
-            when (actionResult) {
-                is AutoAdvanceActionResult.NoCandidateNodeFound -> {
-                    _navState.value = AutoNavigationState.Failed("No accessible page or scroll action available")
-                    return AutoAdvanceCycleResult.Unavailable
-                }
-                is AutoAdvanceActionResult.ActionRejectedByNode -> {
-                    _navState.value = AutoNavigationState.Idle
-                    return AutoAdvanceCycleResult.EndOfAccessibleContent
-                }
-                is AutoAdvanceActionResult.Error -> {
-                    _navState.value = AutoNavigationState.Failed(actionResult.message)
-                    return AutoAdvanceCycleResult.Error(actionResult.message)
-                }
-                is AutoAdvanceActionResult.ServiceUnavailable -> {
-                    _navState.value = AutoNavigationState.Failed("Service unavailable")
-                    return AutoAdvanceCycleResult.Unavailable
-                }
-                is AutoAdvanceActionResult.Dispatched -> {
-                    // Action successfully dispatched, wait for content change
-                }
-            }
+            val preText = lastExtractedText
+            val preFingerprint = ContentFingerprint.create(preText)
 
-            _navState.value = AutoNavigationState.WaitingForContentChange
-
-            // 4. Wait for content change event or settling timeout
-            try {
-                withTimeoutOrNull(1500) {
-                    service.contentChangeEventFlow.firstOrNull { event ->
-                        val pkg = event.packageName?.toString()
-                        pkg == target.packageName
-                    }
-                }
-            } catch (_: Throwable) {}
-
-            // Settle delay for visual page flip / scroll transition animation to finish
-            delay(350)
-
-            _navState.value = AutoNavigationState.Acquiring
-
-            // 5. Post-navigation verification: verify package has not switched
-            val postPkg = service.currentActivePackage
-            if (postPkg != null && postPkg != target.packageName && postPkg != context.packageName) {
-                _navState.value = AutoNavigationState.Idle
-                return AutoAdvanceCycleResult.Cancelled
-            }
-
-            val newTarget = service.identifyTargetWindow()
-            if (newTarget == null || newTarget.packageName != target.packageName) {
-                _navState.value = AutoNavigationState.Idle
-                return AutoAdvanceCycleResult.Cancelled
-            }
-
-            // 6. Acquire new screenshot and OCR using the preserved relative region
-            val ocrEngine = com.readme.app.accessibility.OnDeviceCrossAppOcrEngine()
-            val realBounds = com.readme.app.accessibility.ScreenGeometryMapper.getRealDisplayBounds(context)
-            val ocrResult = try {
-                CrossAppOcrCoordinator.executeOcrAcquisition(
-                    capturer = service,
-                    ocrEngine = ocrEngine,
-                    target = newTarget,
-                    selectedRegion = lastSelectedRegion,
-                    displayWidth = realBounds.width(),
-                    displayHeight = realBounds.height()
+            if (validCandidates.isEmpty()) {
+                AutoNavigationDiagnostics.record(
+                    NavigationDiagnosticRecord(
+                        targetPackage = target.packageName,
+                        targetWindowId = target.windowId,
+                        selectedNodeClass = "None",
+                        selectedNodeBounds = Rect(),
+                        selectedNodeResourceId = null,
+                        selectedNodeContentDescription = null,
+                        selectedNodeTextSnippet = null,
+                        isScrollable = false,
+                        availableActions = emptyList(),
+                        selectedNavigationAction = "NONE",
+                        performActionReturnValue = false,
+                        timestampBeforeAction = System.currentTimeMillis(),
+                        timestampAfterAction = System.currentTimeMillis(),
+                        accessibilityEventsReceived = emptyList(),
+                        preNavigationFingerprint = preFingerprint,
+                        postNavigationFingerprint = ContentFingerprint.create(null),
+                        pageChangeDetected = false,
+                        finalNavigationResult = "NO_CANDIDATE_FOUND"
+                    )
                 )
-            } finally {
-                ocrEngine.close()
+                _navState.value = AutoNavigationState.Failed("No accessible page or scroll action available")
+                return AutoAdvanceCycleResult.Unavailable
             }
 
-            when (ocrResult) {
-                is CrossAppOcrAcquisitionResult.Success -> {
-                    val newDoc = ocrResult.document
-                    val newFullText = newDoc.allSegments().joinToString(" ") { it.text }.trim()
+            // 4. Try candidate nodes in ranked order with verified page change detection (Phase 9AA)
+            for (candidate in validCandidates.take(3)) {
+                val actionsToTry = listOf(candidate.actionType to candidate.actionId) + candidate.fallbackActions
+                for ((actionType, actionId) in actionsToTry) {
+                    val timeBefore = System.currentTimeMillis()
+                    val performedSuccessfully = try {
+                        candidate.node.performAction(actionId)
+                    } catch (_: Throwable) {
+                        false
+                    }
+                    val timeAfter = System.currentTimeMillis()
 
-                    // Content change validation:
-                    // If text appears identical to previous screen, retry once after an additional delay
-                    // in case a page turn animation (e.g. page curl, slide) was still completing.
-                    var finalDoc = newDoc
-                    var finalFullText = newFullText
-                    if (finalFullText.isEmpty() || isContentPracticallyIdentical(finalFullText, lastExtractedText)) {
-                        delay(400)
-                        val retryEngine = com.readme.app.accessibility.OnDeviceCrossAppOcrEngine()
-                        val retryResult = try {
-                            CrossAppOcrCoordinator.executeOcrAcquisition(
-                                capturer = service,
-                                ocrEngine = retryEngine,
-                                target = newTarget,
-                                selectedRegion = lastSelectedRegion,
-                                displayWidth = realBounds.width(),
-                                displayHeight = realBounds.height()
+                    if (!performedSuccessfully) {
+                        AutoNavigationDiagnostics.record(
+                            NavigationDiagnosticRecord(
+                                targetPackage = target.packageName,
+                                targetWindowId = target.windowId,
+                                selectedNodeClass = candidate.className,
+                                selectedNodeBounds = candidate.bounds,
+                                selectedNodeResourceId = candidate.resourceId,
+                                selectedNodeContentDescription = candidate.contentDescription,
+                                selectedNodeTextSnippet = candidate.textSnippet,
+                                isScrollable = candidate.isScrollable,
+                                availableActions = candidate.allActions,
+                                selectedNavigationAction = actionType.name,
+                                performActionReturnValue = false,
+                                timestampBeforeAction = timeBefore,
+                                timestampAfterAction = timeAfter,
+                                accessibilityEventsReceived = emptyList(),
+                                preNavigationFingerprint = preFingerprint,
+                                postNavigationFingerprint = ContentFingerprint.create(null),
+                                pageChangeDetected = false,
+                                finalNavigationResult = "ACTION_REJECTED"
                             )
-                        } catch (_: Throwable) {
-                            null
-                        } finally {
-                            retryEngine.close()
-                        }
+                        )
+                        continue // Try next action/candidate
+                    }
 
-                        if (retryResult is CrossAppOcrAcquisitionResult.Success) {
-                            val retryText = retryResult.document.allSegments().joinToString(" ") { it.text }.trim()
-                            if (retryText.isNotEmpty() && !isContentPracticallyIdentical(retryText, lastExtractedText)) {
-                                finalDoc = retryResult.document
-                                finalFullText = retryText
+                    _navState.value = AutoNavigationState.WaitingForContentChange
+
+                    val eventsReceived = mutableListOf<String>()
+                    val eventJob = coroutineScope.launch {
+                        try {
+                            service.contentChangeEventFlow.collect { event ->
+                                if (event.packageName?.toString() == target.packageName) {
+                                    eventsReceived.add(AccessibilityEvent.eventTypeToString(event.eventType))
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+
+                    // Wait for content change event or settling timeout
+                    try {
+                        withTimeoutOrNull(1200) {
+                            service.contentChangeEventFlow.firstOrNull { event ->
+                                val pkg = event.packageName?.toString()
+                                pkg == target.packageName
                             }
                         }
-                    }
+                    } catch (_: Throwable) {}
 
-                    if (finalFullText.isEmpty() || isContentPracticallyIdentical(finalFullText, lastExtractedText)) {
+                    // Settle delay for visual page flip / scroll transition animation to finish completely
+                    delay(450)
+                    eventJob.cancel()
+
+                    _navState.value = AutoNavigationState.Acquiring
+
+                    // Post-navigation verification: verify package has not switched
+                    val postPkg = service.currentActivePackage
+                    if (postPkg != null && postPkg != target.packageName && postPkg != context.packageName) {
                         _navState.value = AutoNavigationState.Idle
-                        return AutoAdvanceCycleResult.ContentUnchanged
+                        return AutoAdvanceCycleResult.Cancelled
                     }
 
-                    // Fresh content successfully acquired!
-                    lastExtractedText = finalFullText
-                    currentTarget = newTarget
+                    val newTarget = service.identifyTargetWindow()
+                    if (newTarget == null || newTarget.packageName != target.packageName) {
+                        _navState.value = AutoNavigationState.Idle
+                        return AutoAdvanceCycleResult.Cancelled
+                    }
 
-                    // Load new ephemeral document and start reading sentence 0
-                    sessionRuntime.loadEphemeralDocument(finalDoc)
-                    sessionRuntime.resumeReading()
+                    // Acquire new screenshot and OCR using the preserved relative region
+                    val ocrEngine = com.readme.app.accessibility.OnDeviceCrossAppOcrEngine()
+                    val realBounds = com.readme.app.accessibility.ScreenGeometryMapper.getRealDisplayBounds(context)
+                    val ocrResult = try {
+                        CrossAppOcrCoordinator.executeOcrAcquisition(
+                            capturer = service,
+                            ocrEngine = ocrEngine,
+                            target = newTarget,
+                            selectedRegion = lastSelectedRegion,
+                            displayWidth = realBounds.width(),
+                            displayHeight = realBounds.height()
+                        )
+                    } finally {
+                        ocrEngine.close()
+                    }
 
-                    _navState.value = AutoNavigationState.Reading
-                    AutoAdvanceCycleResult.Success(finalDoc.allSegments().size, newTarget.generation)
-                }
-                is CrossAppOcrAcquisitionResult.OcrReturnedEmpty,
-                is CrossAppOcrAcquisitionResult.SelectedAreaTooSmall -> {
-                    _navState.value = AutoNavigationState.Idle
-                    AutoAdvanceCycleResult.EndOfAccessibleContent
-                }
-                is CrossAppOcrAcquisitionResult.SensitiveContentBlocked -> {
-                    _navState.value = AutoNavigationState.Failed("Sensitive content blocked")
-                    AutoAdvanceCycleResult.Unavailable
-                }
-                is CrossAppOcrAcquisitionResult.StaleAppSwitch -> {
-                    _navState.value = AutoNavigationState.Idle
-                    AutoAdvanceCycleResult.Cancelled
-                }
-                else -> {
-                    _navState.value = AutoNavigationState.Failed("OCR acquisition failed")
-                    AutoAdvanceCycleResult.Unavailable
+                    when (ocrResult) {
+                        is CrossAppOcrAcquisitionResult.Success -> {
+                            var finalDoc = ocrResult.document
+                            var finalFullText = finalDoc.allSegments().joinToString(" ") { it.text }.trim()
+
+                            // Content change validation:
+                            // If text appears identical to previous screen, retry once after an additional delay
+                            // in case a page turn animation (e.g. page curl, slide) was still completing.
+                            if (finalFullText.isEmpty() || isContentPracticallyIdentical(finalFullText, preText)) {
+                                delay(350)
+                                val retryEngine = com.readme.app.accessibility.OnDeviceCrossAppOcrEngine()
+                                val retryResult = try {
+                                    CrossAppOcrCoordinator.executeOcrAcquisition(
+                                        capturer = service,
+                                        ocrEngine = retryEngine,
+                                        target = newTarget,
+                                        selectedRegion = lastSelectedRegion,
+                                        displayWidth = realBounds.width(),
+                                        displayHeight = realBounds.height()
+                                    )
+                                } catch (_: Throwable) {
+                                    null
+                                } finally {
+                                    retryEngine.close()
+                                }
+
+                                if (retryResult is CrossAppOcrAcquisitionResult.Success) {
+                                    val retryText = retryResult.document.allSegments().joinToString(" ") { it.text }.trim()
+                                    if (retryText.isNotEmpty() && !isContentPracticallyIdentical(retryText, preText)) {
+                                        finalDoc = retryResult.document
+                                        finalFullText = retryText
+                                    }
+                                }
+                            }
+
+                            val postFingerprint = ContentFingerprint.create(finalFullText)
+                            val pageChanged = finalFullText.isNotEmpty() && !isContentPracticallyIdentical(finalFullText, preText)
+
+                            AutoNavigationDiagnostics.record(
+                                NavigationDiagnosticRecord(
+                                    targetPackage = target.packageName,
+                                    targetWindowId = target.windowId,
+                                    selectedNodeClass = candidate.className,
+                                    selectedNodeBounds = candidate.bounds,
+                                    selectedNodeResourceId = candidate.resourceId,
+                                    selectedNodeContentDescription = candidate.contentDescription,
+                                    selectedNodeTextSnippet = candidate.textSnippet,
+                                    isScrollable = candidate.isScrollable,
+                                    availableActions = candidate.allActions,
+                                    selectedNavigationAction = actionType.name,
+                                    performActionReturnValue = true,
+                                    timestampBeforeAction = timeBefore,
+                                    timestampAfterAction = timeAfter,
+                                    accessibilityEventsReceived = eventsReceived.toList(),
+                                    preNavigationFingerprint = preFingerprint,
+                                    postNavigationFingerprint = postFingerprint,
+                                    pageChangeDetected = pageChanged,
+                                    finalNavigationResult = if (pageChanged) "SUCCESS" else "CONTENT_UNCHANGED"
+                                )
+                            )
+
+                            if (pageChanged) {
+                                // Fresh content successfully acquired and verified!
+                                lastExtractedText = finalFullText
+                                currentTarget = newTarget
+
+                                sessionRuntime.loadEphemeralDocument(finalDoc)
+                                sessionRuntime.resumeReading()
+
+                                _navState.value = AutoNavigationState.Reading
+                                return AutoAdvanceCycleResult.Success(finalDoc.allSegments().size, newTarget.generation)
+                            }
+                            // Otherwise, content unchanged (e.g. partial page movement that snapped back).
+                            // Loop continues to attempt next action or next candidate node!
+                        }
+                        is CrossAppOcrAcquisitionResult.StaleAppSwitch -> {
+                            _navState.value = AutoNavigationState.Idle
+                            return AutoAdvanceCycleResult.Cancelled
+                        }
+                        is CrossAppOcrAcquisitionResult.SensitiveContentBlocked -> {
+                            _navState.value = AutoNavigationState.Failed("Sensitive content blocked")
+                            return AutoAdvanceCycleResult.Unavailable
+                        }
+                        else -> {
+                            // Try next action/candidate
+                        }
+                    }
                 }
             }
+
+            // All candidates and actions attempted without verified page change:
+            // Halt cleanly and NEVER re-read the same page!
+            _navState.value = AutoNavigationState.Idle
+            return AutoAdvanceCycleResult.ContentUnchanged
         } catch (e: CancellationException) {
             _navState.value = AutoNavigationState.Idle
             AutoAdvanceCycleResult.Cancelled

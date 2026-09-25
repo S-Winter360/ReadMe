@@ -18,6 +18,7 @@ interface AccessibleNode {
     val isScrollable: Boolean get() = false
     val isEnabled: Boolean get() = true
     val childCount: Int
+    val viewIdResourceName: String? get() = null
     fun getBoundsInScreen(outBounds: android.graphics.Rect) {}
     fun availableActions(): List<Int> = emptyList()
     fun performAction(actionId: Int): Boolean = false
@@ -44,6 +45,12 @@ class AndroidAccessibleNode(val node: AccessibilityNodeInfo) : AccessibleNode {
     override val isScrollable: Boolean get() = node.isScrollable
     override val isEnabled: Boolean get() = node.isEnabled
     override val childCount: Int get() = node.childCount
+    override val viewIdResourceName: String?
+        get() = try {
+            node.viewIdResourceName
+        } catch (_: Throwable) {
+            null
+        }
 
     override fun getBoundsInScreen(outBounds: android.graphics.Rect) {
         try {
