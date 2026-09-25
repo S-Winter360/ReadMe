@@ -227,6 +227,10 @@ class ReadMeViewModel @JvmOverloads constructor(
         scheduleRestart(voiceId = voice, immediate = true)
     }
 
+    fun previewVoice(voice: String) {
+        speechEngine.previewVoice(voice)
+    }
+
     fun updateSpeechVolume(volume: Float) {
         viewModelScope.launch {
             repository.updateSpeechVolume(volume)

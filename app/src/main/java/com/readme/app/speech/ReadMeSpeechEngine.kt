@@ -23,8 +23,15 @@ data class ReadMeVoice(
     val id: String,
     val displayName: String,
     val locale: Locale,
-    val isNetworkConnectionRequired: Boolean
-)
+    val isNetworkConnectionRequired: Boolean,
+    val quality: Int = 300,
+    val latency: Int = 300,
+    val qualityDescriptor: String? = null,
+    val familyKey: String = "",
+    val familyDisplayName: String = ""
+) {
+    val isOffline: Boolean get() = !isNetworkConnectionRequired
+}
 
 interface SpeechEngineListener {
     fun onSegmentStarted(segmentId: String, sessionId: Long)
@@ -78,6 +85,14 @@ open class ReadMeSpeechEngine(context: Context? = null) {
 
     fun setStateForTesting(state: TtsState) {
         _state.value = state
+    }
+
+    fun setAvailableVoicesForTesting(voices: List<ReadMeVoice>) {
+        _availableVoices.value = voices
+    }
+
+    fun discoverVoicesWithRawVoicesForTesting(rawVoices: Collection<Voice>?) {
+        _availableVoices.value = ReadMeVoiceCurator.curateVoices(rawVoices)
     }
 
     open fun setSpeechListener(listener: SpeechEngineListener?) {
@@ -170,51 +185,34 @@ open class ReadMeSpeechEngine(context: Context? = null) {
         val ttsInstance = tts ?: return
         try {
             val rawVoices: Set<Voice>? = ttsInstance.voices
-            if (rawVoices.isNullOrEmpty()) {
-                _availableVoices.value = emptyList()
-                return
-            }
-
-            val defaultLocale = Locale.getDefault()
-            val voiceList = rawVoices.toList()
-
-            val localeGroups = voiceList.groupBy { 
-                if (it.locale.displayName.isNotBlank()) it.locale.displayName else it.name 
-            }
-
-            val readMeVoices = voiceList.map { voice ->
-                val localeDisplayName = if (voice.locale.displayName.isNotBlank()) {
-                    voice.locale.displayName
-                } else {
-                    voice.name
-                }
-                
-                val group = localeGroups[localeDisplayName].orEmpty()
-                val displayName = if (group.size > 1) {
-                    val index = group.indexOf(voice) + 1
-                    "$localeDisplayName • Voice $index"
-                } else {
-                    localeDisplayName
-                }
-
-                ReadMeVoice(
-                    id = voice.name,
-                    displayName = displayName,
-                    locale = voice.locale,
-                    isNetworkConnectionRequired = voice.isNetworkConnectionRequired
-                )
-            }.sortedWith(
-                compareBy<ReadMeVoice> { voice ->
-                    if (voice.locale.language == defaultLocale.language && voice.locale.country == defaultLocale.country) 0
-                    else if (voice.locale.language == defaultLocale.language) 1
-                    else 2
-                }.thenBy { it.locale.displayName }
-                 .thenBy { it.displayName }
-            )
-
-            _availableVoices.value = readMeVoices
+            val curated = ReadMeVoiceCurator.curateVoices(rawVoices)
+            _availableVoices.value = curated
         } catch (e: Exception) {
             _state.value = TtsState.Error
+        }
+    }
+
+    /**
+     * Synthesizes a sample phrase for voice auditioning/preview in the Voice Selector.
+     */
+    open fun previewVoice(
+        voiceId: String,
+        sampleText: String = "Welcome to ReadMe. This is a preview of the selected voice."
+    ) {
+        val ttsInstance = tts ?: return
+        if (_state.value != TtsState.Ready && _state.value != TtsState.Stopped) return
+
+        synchronized(lock) {
+            activeVoiceId = voiceId
+            activeSpeed = 1.0f
+            activePitch = 0.5f
+            activeVolume = 0.8f
+            isSpeakingActive = true
+            activeSessionId = 999999L
+            activeSubId = System.currentTimeMillis()
+            activeSegmentId = "preview"
+            activeSegmentText = sampleText
+            performSynthesis("preview", sampleText, 999999L, activeSubId)
         }
     }
 
@@ -289,10 +287,14 @@ open class ReadMeSpeechEngine(context: Context? = null) {
             val selectedVoice = rawVoices?.find { it.name == activeVoiceId }
             if (selectedVoice != null) {
                 ttsInstance.voice = selectedVoice
+                ttsInstance.language = selectedVoice.locale
             } else {
-                val fallbackVoice = rawVoices?.firstOrNull()
+                val curated = ReadMeVoiceCurator.curateVoices(rawVoices)
+                val fallbackVoice = curated.firstOrNull()?.let { cur -> rawVoices?.find { it.name == cur.id } }
+                    ?: rawVoices?.firstOrNull()
                 if (fallbackVoice != null) {
                     ttsInstance.voice = fallbackVoice
+                    ttsInstance.language = fallbackVoice.locale
                 }
             }
 

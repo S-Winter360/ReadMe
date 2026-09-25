@@ -176,6 +176,9 @@ fun SettingsScreen(
                 voices = availableVoices,
                 onVoiceSelected = { voice ->
                     viewModel.updateSelectedVoice(voice.id)
+                },
+                onPreviewVoice = { voice ->
+                    viewModel.previewVoice(voice.id)
                 }
             )
 
