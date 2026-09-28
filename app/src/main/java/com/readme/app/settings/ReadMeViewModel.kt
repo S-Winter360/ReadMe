@@ -280,6 +280,12 @@ class ReadMeViewModel @JvmOverloads constructor(
         }
     }
 
+    fun setPagedReaderNavigationMode(mode: PagedReaderNavigationMode) {
+        viewModelScope.launch {
+            repository.updatePagedReaderNavigationMode(mode)
+        }
+    }
+
     fun reopenBubble() {
         sessionRuntime.reopenBubble()
         ReadMeReadingService.syncService(getApplication())

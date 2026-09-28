@@ -70,6 +70,8 @@ data class NavigationDiagnosticRecord(
     val timestamp: Long = System.currentTimeMillis(),
     val targetPackage: String,
     val targetWindowId: Int,
+    val navigationMethod: String = "ACCESSIBILITY_ACTION",
+    val readerBounds: Rect = Rect(),
     val selectedNodeClass: String,
     val selectedNodeBounds: Rect,
     val selectedNodeResourceId: String?,
@@ -78,9 +80,13 @@ data class NavigationDiagnosticRecord(
     val isScrollable: Boolean,
     val availableActions: List<Int>,
     val selectedNavigationAction: String,
+    val gestureEnabled: Boolean = false,
+    val tapCoordinates: String? = null,
+    val tapRelativeCoordinates: String? = null,
     val performActionReturnValue: Boolean,
     val timestampBeforeAction: Long,
     val timestampAfterAction: Long,
+    val settlingDurationMs: Long = 0L,
     val accessibilityEventsReceived: List<String>,
     val preNavigationFingerprint: ContentFingerprint,
     val postNavigationFingerprint: ContentFingerprint,
@@ -115,10 +121,11 @@ object AutoNavigationDiagnostics {
         if (BuildConfig.DEBUG) {
             Log.d(
                 TAG,
-                "AutoNavAttempt: pkg=${record.targetPackage}, node=${record.selectedNodeClass}, " +
-                    "action=${record.selectedNavigationAction}, dispatched=${record.performActionReturnValue}, " +
+                "AutoNavAttempt: pkg=${record.targetPackage}, method=${record.navigationMethod}, " +
+                    "node=${record.selectedNodeClass}, action=${record.selectedNavigationAction}, " +
+                    "tap=${record.tapCoordinates ?: "none"}, dispatched=${record.performActionReturnValue}, " +
                     "pageChanged=${record.pageChangeDetected}, result=${record.finalNavigationResult}, " +
-                    "events=${record.accessibilityEventsReceived.size}"
+                    "settleMs=${record.settlingDurationMs}, events=${record.accessibilityEventsReceived.size}"
             )
         }
     }

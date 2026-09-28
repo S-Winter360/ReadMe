@@ -7,5 +7,5 @@
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
     android:canRequestFilterKeyEvents="false"
-    android:canPerformGestures="false"
+    android:canPerformGestures="true"
     android:isAccessibilityTool="false" />

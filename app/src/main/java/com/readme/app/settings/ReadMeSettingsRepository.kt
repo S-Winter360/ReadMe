@@ -32,6 +32,7 @@ class ReadMeSettingsRepository(private val context: Context) {
         val CROSS_APP_READING_ENABLED = booleanPreferencesKey("cross_app_reading_enabled")
         val SCREEN_OCR_CONSENT_GRANTED = booleanPreferencesKey("screen_ocr_consent_granted")
         val AUTO_ADVANCE_SCREEN_READING_ENABLED = booleanPreferencesKey("auto_advance_screen_reading_enabled")
+        val PAGED_READER_NAVIGATION_MODE = stringPreferencesKey("paged_reader_navigation_mode")
     }
 
     val settingsFlow: Flow<ReadMeSettings> = context.dataStore.data
@@ -53,6 +54,12 @@ class ReadMeSettingsRepository(private val context: Context) {
             val isCrossAppEnabled = preferences[PreferencesKeys.CROSS_APP_READING_ENABLED] ?: false
             val isOcrConsentGranted = preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] ?: false
             val isAutoAdvanceEnabled = preferences[PreferencesKeys.AUTO_ADVANCE_SCREEN_READING_ENABLED] ?: false
+            val pagedNavModeStr = preferences[PreferencesKeys.PAGED_READER_NAVIGATION_MODE]
+            val pagedNavMode = if (pagedNavModeStr == PagedReaderNavigationMode.TAP_SCREEN_EDGE.name) {
+                PagedReaderNavigationMode.TAP_SCREEN_EDGE
+            } else {
+                PagedReaderNavigationMode.ACCESSIBILITY_ACTION
+            }
 
             // Validate/clamp numeric values
             val clampedVolume = volume.coerceIn(0.0f, 1.0f)
@@ -68,7 +75,8 @@ class ReadMeSettingsRepository(private val context: Context) {
                 isFloatingReadmeEnabled = isFloatingEnabled,
                 isCrossAppReadingEnabled = isCrossAppEnabled,
                 isScreenOcrConsentGranted = isOcrConsentGranted,
-                isAutoAdvanceScreenReadingEnabled = isAutoAdvanceEnabled
+                isAutoAdvanceScreenReadingEnabled = isAutoAdvanceEnabled,
+                pagedReaderNavigationMode = pagedNavMode
             )
         }
 
@@ -125,6 +133,12 @@ class ReadMeSettingsRepository(private val context: Context) {
     suspend fun updateAutoAdvanceScreenReadingEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.AUTO_ADVANCE_SCREEN_READING_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updatePagedReaderNavigationMode(mode: PagedReaderNavigationMode) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.PAGED_READER_NAVIGATION_MODE] = mode.name
         }
     }
 }

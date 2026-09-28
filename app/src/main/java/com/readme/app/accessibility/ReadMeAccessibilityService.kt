@@ -1,8 +1,10 @@
 package com.readme.app.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Path
 import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
@@ -28,7 +30,7 @@ import kotlin.coroutines.resume
  * - Explicit user-initiated acquisition via [acquireCurrentText] and [captureWindow].
  * - Window screenshot capture restricted to API 34+ via [takeScreenshotOfWindow].
  */
-class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer, CrossAppScreenshotCapturer {
+class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer, CrossAppScreenshotCapturer, CrossAppGestureDispatcher {
 
     private val generationCounter = AtomicLong(0L)
 
@@ -38,6 +40,42 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
 
     override val isSupported: Boolean
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+
+    override val canDispatchGestures: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+
+    /**
+     * Dispatches a single deterministic tap gesture at [x], [y] screen coordinates.
+     * Narrowly restricted to user-enabled automatic paged reader page-turns.
+     */
+    override suspend fun performTap(x: Float, y: Float, durationMs: Long): Boolean {
+        if (!canDispatchGestures) return false
+        return suspendCancellableCoroutine { continuation ->
+            try {
+                val path = Path()
+                path.moveTo(x, y)
+                val clampedDuration = durationMs.coerceIn(40L, 200L)
+                val stroke = GestureDescription.StrokeDescription(path, 0L, clampedDuration)
+                val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+                val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        if (continuation.isActive) continuation.resume(true)
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        if (continuation.isActive) continuation.resume(false)
+                    }
+                }, null)
+
+                if (!dispatched && continuation.isActive) {
+                    continuation.resume(false)
+                }
+            } catch (e: Throwable) {
+                if (continuation.isActive) continuation.resume(false)
+            }
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -370,6 +408,9 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         @Volatile
         var instance: ReadMeAccessibilityService? = null
             internal set
+
+        @Volatile
+        var gestureDispatcherForTesting: CrossAppGestureDispatcher? = null
 
         private val _activePackageFlow = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
         val activePackageFlow: kotlinx.coroutines.flow.StateFlow<String?> = _activePackageFlow

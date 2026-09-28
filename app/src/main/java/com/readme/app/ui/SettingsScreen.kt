@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -48,15 +49,19 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.readme.app.R
 import com.readme.app.accessibility.ReadMeAccessibilityService
+import com.readme.app.settings.PagedReaderNavigationMode
 import com.readme.app.settings.ReadMeViewModel
 import com.readme.app.ui.components.ReadMeBackButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import com.readme.app.accessibility.DebugOcrCaptureInspector
@@ -344,34 +349,112 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
-                        Text(
-                            text = "Automatic screen advance",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "Automatically move to the next page or scroll when the current screen content has been read.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(
+                                text = "Automatic screen advance",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Automatically move to the next page or scroll when supported by the current app.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = settings.isAutoAdvanceScreenReadingEnabled,
+                            onCheckedChange = { checked ->
+                                viewModel.setAutoAdvanceScreenReadingEnabled(checked)
+                            },
+                            modifier = Modifier
+                                .semantics {
+                                    this.contentDescription = "Automatic screen advance, switch"
+                                }
+                                .testTag("setting_auto_advance_switch")
                         )
                     }
-                    Switch(
-                        checked = settings.isAutoAdvanceScreenReadingEnabled,
-                        onCheckedChange = { checked ->
-                            viewModel.setAutoAdvanceScreenReadingEnabled(checked)
-                        },
-                        modifier = Modifier
-                            .semantics {
-                                this.contentDescription = "Automatic screen advance, switch"
+
+                    if (settings.isAutoAdvanceScreenReadingEnabled) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Paged reader navigation",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Option 1: Accessibility action
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    viewModel.setPagedReaderNavigationMode(PagedReaderNavigationMode.ACCESSIBILITY_ACTION)
+                                }
+                                .padding(vertical = 8.dp, horizontal = 4.dp)
+                                .testTag("setting_paged_nav_accessibility"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = settings.pagedReaderNavigationMode == PagedReaderNavigationMode.ACCESSIBILITY_ACTION,
+                                onClick = {
+                                    viewModel.setPagedReaderNavigationMode(PagedReaderNavigationMode.ACCESSIBILITY_ACTION)
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Accessibility action",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Uses standard accessibility page-turn action where reliable.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                            .testTag("setting_auto_advance_switch")
-                    )
+                        }
+
+                        // Option 2: Tap screen edge
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    viewModel.setPagedReaderNavigationMode(PagedReaderNavigationMode.TAP_SCREEN_EDGE)
+                                }
+                                .padding(vertical = 8.dp, horizontal = 4.dp)
+                                .testTag("setting_paged_nav_edge_tap"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = settings.pagedReaderNavigationMode == PagedReaderNavigationMode.TAP_SCREEN_EDGE,
+                                onClick = {
+                                    viewModel.setPagedReaderNavigationMode(PagedReaderNavigationMode.TAP_SCREEN_EDGE)
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Tap screen edge",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Taps the edge of the reading page to turn pages in novel readers.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
             }
 

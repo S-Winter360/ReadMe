@@ -70,7 +70,8 @@ class ReadMeReadingService : Service() {
         autoNavigationCoordinator = com.readme.app.accessibility.autonav.AutoNavigationCoordinator(
             context = applicationContext,
             sessionRuntime = sessionRuntime,
-            getHighlightOverlayController = { highlightOverlayController }
+            getHighlightOverlayController = { highlightOverlayController },
+            settingsRepository = settingsRepo
         )
 
         val foregroundAndPickerFlow = combine(
@@ -152,9 +153,11 @@ class ReadMeReadingService : Service() {
                     if (target != null) {
                         val cycleResult = autoNavigationCoordinator?.attemptAutoAdvance(target, serviceScope)
                         when (cycleResult) {
-                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.EndOfAccessibleContent,
-                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.ContentUnchanged -> {
+                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.EndOfAccessibleContent -> {
                                 Toast.makeText(this@ReadMeReadingService, "End of accessible content", Toast.LENGTH_SHORT).show()
+                            }
+                            is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.ContentUnchanged -> {
+                                Toast.makeText(this@ReadMeReadingService, "ReadMe couldn't turn the page here.", Toast.LENGTH_SHORT).show()
                             }
                             is com.readme.app.accessibility.autonav.AutoAdvanceCycleResult.Unavailable -> {
                                 Toast.makeText(this@ReadMeReadingService, "Automatic screen advance isn't available here.", Toast.LENGTH_SHORT).show()
