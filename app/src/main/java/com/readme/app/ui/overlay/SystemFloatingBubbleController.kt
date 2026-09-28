@@ -50,7 +50,8 @@ class SystemFloatingBubbleController(private val context: Context) {
         onReselectArea: () -> Unit = {},
         onStopReading: () -> Unit = {},
         onCloseBubble: () -> Unit = {},
-        onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
+        onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {},
+        onCalibrateNextPage: () -> Unit = {}
     ) {
         val hasOverlay = Settings.canDrawOverlays(context)
         ReadMeCrashLogger.overlayPermissionGranted = hasOverlay
@@ -83,6 +84,7 @@ class SystemFloatingBubbleController(private val context: Context) {
             onStopReading = onStopReading,
             onCloseBubble = onCloseBubble,
             onAcquireMode = onAcquireMode,
+            onCalibrateNextPage = onCalibrateNextPage,
             onDragStart = { handleDragStart() },
             onDrag = { dx, dy -> handleDrag(view, dx, dy) },
             onDragEnd = { handleDragEnd(view, onCloseBubble) },

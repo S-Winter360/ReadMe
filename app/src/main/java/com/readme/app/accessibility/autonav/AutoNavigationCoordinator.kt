@@ -48,7 +48,8 @@ class AutoNavigationCoordinator(
     private val sessionRuntime: ReadMeReadingSessionRuntime,
     private val getHighlightOverlayController: () -> ScreenHighlightOverlayController?,
     private val settingsRepository: ReadMeSettingsRepository? = null,
-    private val gestureDispatcher: CrossAppGestureDispatcher? = null
+    private val gestureDispatcher: CrossAppGestureDispatcher? = null,
+    private val calibrationRepository: PageTurnCalibrationRepository? = null
 ) {
     private val _navState = MutableStateFlow<AutoNavigationState>(AutoNavigationState.Idle)
     val navState: StateFlow<AutoNavigationState> = _navState.asStateFlow()
@@ -289,6 +290,92 @@ class AutoNavigationCoordinator(
             val pagedInfo = PaginatedReaderDetector.detect(validCandidates, lastSelectedRegion, initialDisplayBounds)
             val settings = getEffectiveSettings()
             val isEdgeTapConfigured = settings.pagedReaderNavigationMode == PagedReaderNavigationMode.TAP_SCREEN_EDGE
+
+            // Check if user has explicitly calibrated a next-page turn location for this application (Phase 9AD)
+            val currentOrientation = context.resources.configuration.orientation
+            val calibrationRepo = calibrationRepository ?: PageTurnCalibrationRepository.getInstance(context)
+            val calibratedTap = calibrationRepo.getCalibration(target.packageName, currentOrientation)
+
+            if (calibratedTap != null) {
+                // ==========================================
+                // USER-CALIBRATED NOVEL PAGE-TURN TAP (Phase 9AD)
+                // ==========================================
+                // Priority #1 for calibrated applications.
+                // Single deterministic tap at user-specified location.
+                // No guessing loops. No PAGE_RIGHT, no SCROLL_FORWARD, no edge tap fallback.
+                val (tapX, tapY) = calibratedTap.resolveTapPoint(
+                    readerBounds = pagedInfo.readerBounds,
+                    displayBounds = initialDisplayBounds
+                )
+
+                val dispatcher = getEffectiveGestureDispatcher()
+                if (dispatcher != null && dispatcher.canDispatchGestures) {
+                    val timeBefore = System.currentTimeMillis()
+                    val tapSuccess = dispatcher.performTap(tapX, tapY, durationMs = 80L)
+                    val timeAfter = System.currentTimeMillis()
+
+                    if (tapSuccess) {
+                        _navState.value = AutoNavigationState.WaitingForContentChange
+
+                        val verification = settleAndVerifyOcr(
+                            service = service,
+                            target = target,
+                            preText = preText,
+                            realBounds = initialDisplayBounds,
+                            coroutineScope = coroutineScope,
+                            settleMs = 500L
+                        )
+
+                        AutoNavigationDiagnostics.record(
+                            NavigationDiagnosticRecord(
+                                targetPackage = target.packageName,
+                                targetWindowId = target.windowId,
+                                navigationMethod = "USER_CALIBRATED_TAP",
+                                readerBounds = pagedInfo.readerBounds,
+                                selectedNodeClass = "UserCalibratedPageTurn",
+                                selectedNodeBounds = pagedInfo.readerBounds,
+                                selectedNodeResourceId = null,
+                                selectedNodeContentDescription = null,
+                                selectedNodeTextSnippet = null,
+                                isScrollable = true,
+                                availableActions = emptyList(),
+                                selectedNavigationAction = "CALIBRATED_NEXT_PAGE_TAP",
+                                gestureEnabled = true,
+                                tapCoordinates = "(${tapX.toInt()}, ${tapY.toInt()})",
+                                tapRelativeCoordinates = "(${String.format(java.util.Locale.US, "%.2f", calibratedTap.relativeX)}, ${String.format(java.util.Locale.US, "%.2f", calibratedTap.relativeY)})",
+                                performActionReturnValue = true,
+                                timestampBeforeAction = timeBefore,
+                                timestampAfterAction = timeAfter,
+                                settlingDurationMs = 500L,
+                                accessibilityEventsReceived = verification.eventsReceived,
+                                preNavigationFingerprint = preFingerprint,
+                                postNavigationFingerprint = verification.postFingerprint,
+                                pageChangeDetected = verification.pageChanged,
+                                finalNavigationResult = if (verification.pageChanged) "SUCCESS" else "CONTENT_UNCHANGED"
+                            )
+                        )
+
+                        if (verification.pageChanged && verification.finalDoc != null) {
+                            lastExtractedText = verification.finalText
+                            currentTarget = verification.newTarget ?: target
+                            sessionRuntime.loadEphemeralDocument(verification.finalDoc)
+                            sessionRuntime.resumeReading()
+                            _navState.value = AutoNavigationState.Reading
+                            return AutoAdvanceCycleResult.Success(verification.finalDoc.allSegments().size, target.generation)
+                        } else {
+                            // Content unchanged. Safe halt. NEVER reread the same page.
+                            _navState.value = AutoNavigationState.Idle
+                            return AutoAdvanceCycleResult.ContentUnchanged
+                        }
+                    } else {
+                        _navState.value = AutoNavigationState.Failed("Calibrated gesture tap rejected by system")
+                        return AutoAdvanceCycleResult.Unavailable
+                    }
+                } else {
+                    _navState.value = AutoNavigationState.Failed("Gesture capability unavailable")
+                    return AutoAdvanceCycleResult.Unavailable
+                }
+            }
 
             if (pagedInfo.isPaginatedReader) {
                 // ==========================================

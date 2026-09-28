@@ -286,6 +286,22 @@ class ReadMeViewModel @JvmOverloads constructor(
         }
     }
 
+    val pageTurnCalibrations: StateFlow<Map<String, com.readme.app.accessibility.autonav.PageTurnCalibration>> =
+        com.readme.app.accessibility.autonav.PageTurnCalibrationRepository.getInstance(getApplication()).calibrationsFlow
+
+    fun clearCalibration(packageName: String) {
+        viewModelScope.launch {
+            com.readme.app.accessibility.autonav.PageTurnCalibrationRepository.getInstance(getApplication()).clearCalibration(packageName)
+        }
+    }
+
+    fun startPageTurnCalibration(
+        targetPackage: String? = null,
+        onCompleted: (com.readme.app.accessibility.autonav.PageTurnCalibration?) -> Unit = {}
+    ) {
+        ReadMeReadingService.startPageTurnCalibration(getApplication(), targetPackage, onCompleted)
+    }
+
     fun reopenBubble() {
         sessionRuntime.reopenBubble()
         ReadMeReadingService.syncService(getApplication())

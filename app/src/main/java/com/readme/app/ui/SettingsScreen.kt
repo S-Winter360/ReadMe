@@ -54,6 +54,9 @@ import com.readme.app.settings.ReadMeViewModel
 import com.readme.app.ui.components.ReadMeBackButton
 import com.readme.app.ui.components.ReadMeSliderControl
 import com.readme.app.ui.components.ReadMeVoiceSelector
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -84,6 +87,7 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val availableVoices by viewModel.availableVoices.collectAsStateWithLifecycle()
     val isBubbleClosedByUser by viewModel.isBubbleClosedByUser.collectAsStateWithLifecycle()
+    val calibrations by viewModel.pageTurnCalibrations.collectAsStateWithLifecycle()
 
     var isAccessibilityEnabled by remember {
         mutableStateOf(ReadMeAccessibilityService.isServiceEnabled(context))
@@ -453,6 +457,118 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = "Calibrate Next Page",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Tell ReadMe where you normally tap to turn to the next page in your novel reader.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        if (calibrations.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                calibrations.forEach { (pkg, cal) ->
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(10.dp).fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = pkg,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Text(
+                                                    text = "Calibrated tap at (${(cal.relativeX * 100).toInt()}%, ${(cal.relativeY * 100).toInt()}%)",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = { viewModel.clearCalibration(pkg) },
+                                                modifier = Modifier.testTag("setting_clear_calibration_$pkg")
+                                            ) {
+                                                Text("✕", color = MaterialTheme.colorScheme.error)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                        }
+
+                        var showCalibrationInstructionDialog by remember { mutableStateOf(false) }
+
+                        Button(
+                            onClick = {
+                                if (!isAccessibilityEnabled) {
+                                    showAccessibilityDisclosureDialog = true
+                                } else if (!hasOverlayPermission) {
+                                    val intent = Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                    context.startActivity(intent)
+                                } else {
+                                    showCalibrationInstructionDialog = true
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("setting_calibrate_next_page_button")
+                        ) {
+                            Text(if (calibrations.isEmpty()) "Calibrate Next Page" else "Calibrate Reader App")
+                        }
+
+                        if (showCalibrationInstructionDialog) {
+                            AlertDialog(
+                                onDismissRequest = { showCalibrationInstructionDialog = false },
+                                title = {
+                                    Text("Calibrate Next Page Turn")
+                                },
+                                text = {
+                                    Text("Open your novel reader app. ReadMe will detect when your reader is on screen and display a calibration screen so you can tap your exact page-turn spot.")
+                                },
+                                confirmButton = {
+                                    TextButton(
+                                        onClick = {
+                                            showCalibrationInstructionDialog = false
+                                            viewModel.startPageTurnCalibration()
+                                        },
+                                        modifier = Modifier.testTag("dialog_confirm_start_calibration")
+                                    ) {
+                                        Text("Start Calibration")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(
+                                        onClick = { showCalibrationInstructionDialog = false }
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                }
+                            )
                         }
                     }
                 }

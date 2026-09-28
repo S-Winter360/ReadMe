@@ -46,6 +46,7 @@ class ReadMeReadingService : Service() {
     private var bubbleController: SystemFloatingBubbleController? = null
     private var selectionController: ScreenRegionSelectionController? = null
     private var highlightOverlayController: ScreenHighlightOverlayController? = null
+    private var calibrationController: com.readme.app.ui.overlay.PageTurnCalibrationOverlayController? = null
     private var autoNavigationCoordinator: com.readme.app.accessibility.autonav.AutoNavigationCoordinator? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var lastSettings: ReadMeSettings = ReadMeSettings()
@@ -57,6 +58,7 @@ class ReadMeReadingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         ReadMeCrashLogger.currentServiceInstanceId = serviceInstanceId
         ReadMeCrashLogger.currentLifecycleState = "ServiceCreated"
         if (BuildConfig.DEBUG) {
@@ -67,11 +69,13 @@ class ReadMeReadingService : Service() {
         bubbleController = SystemFloatingBubbleController(applicationContext)
         selectionController = ScreenRegionSelectionController(applicationContext)
         highlightOverlayController = ScreenHighlightOverlayController(applicationContext)
+        calibrationController = com.readme.app.ui.overlay.PageTurnCalibrationOverlayController(applicationContext)
         autoNavigationCoordinator = com.readme.app.accessibility.autonav.AutoNavigationCoordinator(
             context = applicationContext,
             sessionRuntime = sessionRuntime,
             getHighlightOverlayController = { highlightOverlayController },
-            settingsRepository = settingsRepo
+            settingsRepository = settingsRepo,
+            calibrationRepository = com.readme.app.accessibility.autonav.PageTurnCalibrationRepository.getInstance(applicationContext)
         )
 
         val foregroundAndPickerFlow = combine(
@@ -123,6 +127,9 @@ class ReadMeReadingService : Service() {
 
         serviceScope.launch {
             ReadMeAccessibilityService.activePackageFlow.collect { activePkg ->
+                if (!activePkg.isNullOrBlank()) {
+                    calibrationController?.checkAndTriggerIfArmed(activePkg)
+                }
                 val docState = sessionRuntime.activeDocumentState.value
                 if (docState.isEphemeral && !docState.sourcePackageName.isNullOrBlank()) {
                     if (!activePkg.isNullOrBlank() && activePkg != packageName && activePkg != docState.sourcePackageName) {
@@ -298,6 +305,24 @@ class ReadMeReadingService : Service() {
                 },
                 onAcquireMode = { mode ->
                     startAcquisition(mode)
+                },
+                onCalibrateNextPage = {
+                    val targetPkg = ReadMeAccessibilityService.instance?.currentActivePackage
+                        ?: sessionRuntime.activeDocumentState.value.sourcePackageName
+                    if (!targetPkg.isNullOrBlank()) {
+                        bubbleController?.hide()
+                        calibrationController?.show(
+                            packageName = targetPkg,
+                            onCompleted = {
+                                syncService(applicationContext)
+                            },
+                            onCancelled = {
+                                syncService(applicationContext)
+                            }
+                        )
+                    } else {
+                        Toast.makeText(this@ReadMeReadingService, "Open your novel reader to calibrate", Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
         } else {
@@ -512,6 +537,9 @@ class ReadMeReadingService : Service() {
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "ReadMeReadingService onDestroy (ID: $serviceInstanceId)")
         }
+        if (instance === this) {
+            instance = null
+        }
         bubbleController?.destroy()
         selectionController?.dismiss()
         highlightOverlayController?.destroy()
@@ -553,11 +581,29 @@ class ReadMeReadingService : Service() {
             }
         }
 
+        @Volatile
+        var instance: ReadMeReadingService? = null
+            private set
+
         fun stopReading(context: Context) {
             val intent = Intent(context, ReadMeReadingService::class.java).apply {
                 action = ACTION_STOP_READING
             }
             context.startService(intent)
+        }
+
+        fun startPageTurnCalibration(
+            context: Context,
+            targetPackage: String? = null,
+            onCompleted: (com.readme.app.accessibility.autonav.PageTurnCalibration?) -> Unit = {}
+        ) {
+            val activeService = instance
+            if (activeService != null && activeService.calibrationController != null) {
+                activeService.calibrationController?.armCalibration(targetPackage, onCompleted)
+            } else {
+                val overlayController = com.readme.app.ui.overlay.PageTurnCalibrationOverlayController(context.applicationContext)
+                overlayController.armCalibration(targetPackage, onCompleted)
+            }
         }
 
         fun syncService(context: Context) {

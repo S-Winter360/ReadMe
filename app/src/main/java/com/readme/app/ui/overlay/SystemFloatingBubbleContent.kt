@@ -76,6 +76,7 @@ fun SystemFloatingBubbleContent(
     onStopReading: () -> Unit = {},
     onCloseBubble: () -> Unit = {},
     onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {},
+    onCalibrateNextPage: () -> Unit = {},
     onDragStart: () -> Unit = {},
     onDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {},
@@ -221,6 +222,19 @@ fun SystemFloatingBubbleContent(
                                 }
                             )
 
+                            // Calibrate button (available during reading or idle when auto-advance is on)
+                            if (isAutoAdvanceEnabled) {
+                                BubbleActionButton(
+                                    icon = "🎯",
+                                    label = "Calibrate next page",
+                                    testTag = "bubble_calibrate_button",
+                                    onClick = {
+                                        isExpanded = false
+                                        onCalibrateNextPage()
+                                    }
+                                )
+                            }
+
                             // Auto-advance indicator badge
                             if (activeDocumentState.isEphemeral && isAutoAdvanceEnabled) {
                                 Surface(
@@ -259,6 +273,17 @@ fun SystemFloatingBubbleContent(
                                         onAcquireMode(CrossAppAcquisitionMode.SCREEN_OCR)
                                     }
                                 )
+                                if (isAutoAdvanceEnabled) {
+                                    BubbleActionButton(
+                                        icon = "🎯",
+                                        label = "Calibrate next page",
+                                        testTag = "bubble_calibrate_button",
+                                        onClick = {
+                                            isExpanded = false
+                                            onCalibrateNextPage()
+                                        }
+                                    )
+                                }
                             } else {
                                 Text(
                                     text = "Cross-app OFF",
