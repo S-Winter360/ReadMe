@@ -322,10 +322,10 @@ class ReadMeReadingService : Service() {
                         calibrationController?.show(
                             packageName = targetPkg,
                             onCompleted = {
-                                syncService(applicationContext)
+                                refreshBubbleAndNotification()
                             },
                             onCancelled = {
-                                syncService(applicationContext)
+                                refreshBubbleAndNotification()
                             }
                         )
                     } else {
@@ -336,6 +336,27 @@ class ReadMeReadingService : Service() {
         } else {
             bubbleController?.hide()
         }
+    }
+
+    private fun refreshBubbleAndNotification() {
+        val canDraw = Settings.canDrawOverlays(this)
+        val docState = sessionRuntime.activeDocumentState.value
+        val sessionState = sessionRuntime.readingSessionState.value
+        val fg = sessionRuntime.appForegroundState.value
+        val dp = sessionRuntime.isDocumentPickerActive.value
+        val isClosed = sessionRuntime.isBubbleClosedByUser.value
+        val settings = lastSettings
+
+        updateNotificationAndBubble(
+            BubbleAndNotificationState(
+                sessionState = sessionState,
+                docState = docState,
+                isForeground = fg,
+                isDocumentPickerActive = dp,
+                settings = settings,
+                isClosedByUser = isClosed
+            )
+        )
     }
 
     private fun handleReselectArea() {
@@ -362,26 +383,8 @@ class ReadMeReadingService : Service() {
                         executeAcquisitionFlow(mode, selectedRegion)
                     },
                     onCancelled = {
-                        // If cancelled, restore bubble visibility
-                        val canDraw = Settings.canDrawOverlays(this@ReadMeReadingService)
-                        val docState = sessionRuntime.activeDocumentState.value
-                        val settings = lastSettings
-                        if (BubbleLifecyclePolicy.computeVisibilityState(
-                                isFloatingEnabled = settings.isFloatingReadmeEnabled,
-                                hasOverlayPermission = canDraw,
-                                isForeground = sessionRuntime.appForegroundState.value,
-                                isClosedByUser = sessionRuntime.isBubbleClosedByUser.value,
-                                isDocumentPickerActive = sessionRuntime.isDocumentPickerActive.value
-                            ) == BubbleVisibilityState.Visible
-                        ) {
-                            val sessionState = sessionRuntime.readingSessionState.value
-                            bubbleController?.show(
-                                sessionState = sessionState,
-                                activeDocumentState = docState,
-                                crossAppReadingEnabled = settings.isCrossAppReadingEnabled,
-                                canAcquireText = ReadMeAccessibilityService.isConnected && settings.isCrossAppReadingEnabled && !docState.hasActiveDocument
-                            )
-                        }
+                        // Restore full bubble state and all functional callbacks immediately
+                        refreshBubbleAndNotification()
                     }
                 )
             } else {

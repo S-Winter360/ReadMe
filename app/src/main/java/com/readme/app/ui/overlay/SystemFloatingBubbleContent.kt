@@ -125,20 +125,43 @@ fun SystemFloatingBubbleContent(
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer)
                     .pointerInput(Unit) {
+                        var isDragging = false
+                        var accumulatedDragX = 0f
+                        var accumulatedDragY = 0f
                         detectDragGestures(
-                            onDragStart = { onDragStart() },
-                            onDragEnd = { onDragEnd() },
-                            onDragCancel = { onDragCancel() },
+                            onDragStart = {
+                                isDragging = false
+                                accumulatedDragX = 0f
+                                accumulatedDragY = 0f
+                            },
+                            onDragEnd = {
+                                if (isDragging) {
+                                    onDragEnd()
+                                } else {
+                                    // Tap recognized without dragging: expand/collapse controls
+                                    isExpanded = !isExpanded
+                                }
+                                isDragging = false
+                            },
+                            onDragCancel = {
+                                if (isDragging) {
+                                    onDragCancel()
+                                }
+                                isDragging = false
+                            },
                             onDrag = { change, dragAmount ->
-                                change.consume()
-                                onDrag(dragAmount.x, dragAmount.y)
+                                accumulatedDragX += Math.abs(dragAmount.x)
+                                accumulatedDragY += Math.abs(dragAmount.y)
+                                if (accumulatedDragX > 8f || accumulatedDragY > 8f) {
+                                    if (!isDragging) {
+                                        isDragging = true
+                                        onDragStart()
+                                    }
+                                    change.consume()
+                                    onDrag(dragAmount.x, dragAmount.y)
+                                }
                             }
                         )
-                    }
-                    .clickable {
-                        // Single tap on compact bubble expands or collapses controls.
-                        // Does NOT stop reading!
-                        isExpanded = !isExpanded
                     }
                     .semantics {
                         this.contentDescription = "ReadMe floating bubble"

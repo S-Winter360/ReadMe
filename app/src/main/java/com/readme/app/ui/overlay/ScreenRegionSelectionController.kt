@@ -28,7 +28,7 @@ import com.readme.app.accessibility.ScreenGeometryMapper
 import com.readme.app.diagnostics.ReadMeCrashLogger
 
 /**
- * Deterministic selector state model according to Phase 9AE Section 3.
+ * Deterministic selector state model according to Phase 9AE/9AF.
  */
 sealed class SelectorState {
     object Idle : SelectorState()
@@ -56,19 +56,20 @@ sealed class SelectorState {
 /**
  * Controller that displays a full-screen interactive overlay for selecting a reading region.
  *
- * Hardened for Phase 9AE:
+ * Hardened for Phase 9AF:
  * - Deterministic State Machine (Idle, Showing, Selecting, Confirming, Cancelling, Completed, Destroyed, Failed)
+ * - Cancel idempotency and exactly-once callback dispatch
+ * - Synchronous and immediate WindowManager surface detachment on Cancel to prevent ghost overlays
+ * - Complete touch listener detachment and View.GONE visibility on dismissal
  * - Single attached selector globally across instances and per instance (no duplicate addView calls)
  * - WindowManager exception safety (BadTokenException, SecurityException, IllegalStateException, IllegalArgumentException)
- * - Proper window context (API 30+ createWindowContext for TYPE_APPLICATION_OVERLAY)
- * - Multi-touch and gesture safety
+ * - Stable display-aware window context
  * - Main thread affinity and safe destruction
  */
 class ScreenRegionSelectionController(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // Section 6: Proper Window Context - create one stable window context for the controller
     private val windowContext: Context = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
         try {
             context.createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
@@ -102,6 +103,12 @@ class ScreenRegionSelectionController(private val context: Context) {
     @Volatile
     private var currentEffectiveBounds: Rect = Rect()
 
+    @Volatile
+    private var pendingCancelledCallback: (() -> Unit)? = null
+
+    @Volatile
+    private var pendingSelectedCallback: ((Rect) -> Unit)? = null
+
     val isAttached: Boolean
         get() = synchronized(stateLock) {
             (currentState == SelectorState.Showing || currentState == SelectorState.Selecting) && overlayView != null
@@ -133,7 +140,11 @@ class ScreenRegionSelectionController(private val context: Context) {
                 return
             }
 
-            // Section 4: If already attached in this instance, update current selection rather than adding another view
+            // Register callbacks
+            pendingSelectedCallback = onRegionSelected
+            pendingCancelledCallback = onCancelled
+
+            // If already attached in this instance, update current selection rather than adding another view
             if (isAttached && overlayView != null) {
                 val realBounds = ScreenGeometryMapper.getRealDisplayBounds(context)
                 val screenW = realBounds.width().coerceAtLeast(720)
@@ -153,7 +164,7 @@ class ScreenRegionSelectionController(private val context: Context) {
                 return
             }
 
-            // Section 4: At most one ScreenRegionSelectionController instance may own an attached selector overlay at a time
+            // Enforce at most one selector overlay globally
             activeAttachedInstance?.takeIf { it !== this }?.let { otherController ->
                 Log.i(TAG, "Dismissing previous active selector instance to enforce single attached selector")
                 otherController.dismiss()
@@ -164,7 +175,10 @@ class ScreenRegionSelectionController(private val context: Context) {
                 Log.w(TAG, "Overlay permission not granted; cannot show region selection")
                 currentState = SelectorState.Failed("Overlay permission unavailable")
                 ReadMeCrashLogger.selectorState = "Failed: PermissionUnavailable"
-                onCancelled()
+                val cb = pendingCancelledCallback
+                pendingCancelledCallback = null
+                pendingSelectedCallback = null
+                cb?.invoke()
                 return
             }
 
@@ -172,11 +186,13 @@ class ScreenRegionSelectionController(private val context: Context) {
                 Log.e(TAG, "WindowManager unavailable; cannot show region selection")
                 currentState = SelectorState.Failed("WindowManager unavailable")
                 ReadMeCrashLogger.selectorState = "Failed: WindowManagerUnavailable"
-                onCancelled()
+                val cb = pendingCancelledCallback
+                pendingCancelledCallback = null
+                pendingSelectedCallback = null
+                cb?.invoke()
                 return
             }
 
-            // Prevent duplicate Showing transitions
             currentState = SelectorState.Showing
             ReadMeCrashLogger.selectorState = "Showing"
 
@@ -327,20 +343,7 @@ class ScreenRegionSelectionController(private val context: Context) {
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
-                    synchronized(stateLock) {
-                        // Prevent duplicate cancellation or confirm-after-cancel
-                        if (currentState != SelectorState.Selecting && currentState != SelectorState.Showing) {
-                            return@setOnClickListener
-                        }
-                        currentState = SelectorState.Cancelling
-                        ReadMeCrashLogger.selectorState = "Cancelling"
-                    }
-                    dismiss()
-                    synchronized(stateLock) {
-                        currentState = SelectorState.Idle
-                        ReadMeCrashLogger.selectorState = "Idle"
-                    }
-                    onCancelled()
+                    performCancel()
                 }
             }
 
@@ -361,37 +364,43 @@ class ScreenRegionSelectionController(private val context: Context) {
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
-                    synchronized(stateLock) {
-                        // Prevent duplicate confirmation (Confirming -> Confirming) or Cancelling -> Confirming
+                    val cb = synchronized(stateLock) {
                         if (currentState != SelectorState.Selecting && currentState != SelectorState.Showing) {
-                            return@setOnClickListener
+                            null
+                        } else {
+                            currentState = SelectorState.Confirming
+                            ReadMeCrashLogger.selectorState = "Confirming"
+                            val callback = pendingSelectedCallback
+                            pendingSelectedCallback = null
+                            pendingCancelledCallback = null
+                            callback
                         }
-                        currentState = SelectorState.Confirming
-                        ReadMeCrashLogger.selectorState = "Confirming"
                     }
 
-                    val loc = IntArray(2)
-                    try {
-                        canvasView.getLocationOnScreen(loc)
-                    } catch (_: Throwable) {}
-                    val norm = ScreenGeometryMapper.normalizeRect(currentRect)
-                    val onScreen = if (loc[0] != 0 || loc[1] != 0) {
-                        Rect(
-                            norm.left + loc[0],
-                            norm.top + loc[1],
-                            norm.right + loc[0],
-                            norm.bottom + loc[1]
-                        )
-                    } else {
-                        norm
+                    if (cb != null) {
+                        val loc = IntArray(2)
+                        try {
+                            canvasView.getLocationOnScreen(loc)
+                        } catch (_: Throwable) {}
+                        val norm = ScreenGeometryMapper.normalizeRect(currentRect)
+                        val onScreen = if (loc[0] != 0 || loc[1] != 0) {
+                            Rect(
+                                norm.left + loc[0],
+                                norm.top + loc[1],
+                                norm.right + loc[0],
+                                norm.bottom + loc[1]
+                            )
+                        } else {
+                            norm
+                        }
+                        val clamped = ScreenGeometryMapper.clampRegion(onScreen, effectiveBounds) ?: onScreen
+                        dismiss()
+                        synchronized(stateLock) {
+                            currentState = SelectorState.Completed
+                            ReadMeCrashLogger.selectorState = "Completed"
+                        }
+                        cb(clamped)
                     }
-                    val clamped = ScreenGeometryMapper.clampRegion(onScreen, effectiveBounds) ?: onScreen
-                    dismiss()
-                    synchronized(stateLock) {
-                        currentState = SelectorState.Completed
-                        ReadMeCrashLogger.selectorState = "Completed"
-                    }
-                    onRegionSelected(clamped)
                 }
             }
 
@@ -418,7 +427,6 @@ class ScreenRegionSelectionController(private val context: Context) {
             val handleRadius = (32f * dm.density).coerceAtLeast(48f)
 
             canvasView.setOnTouchListener { _, event ->
-                // Guard touch events against invalid state machine phases
                 val state = synchronized(stateLock) { currentState }
                 if (state != SelectorState.Selecting && state != SelectorState.Showing) {
                     return@setOnTouchListener false
@@ -540,7 +548,6 @@ class ScreenRegionSelectionController(private val context: Context) {
                 }
             }
 
-            // Section 5: WindowManager Safety - Audit and guard addView
             try {
                 wm.addView(root, params)
                 overlayView = root
@@ -551,27 +558,55 @@ class ScreenRegionSelectionController(private val context: Context) {
                 ReadMeCrashLogger.selectorState = "Selecting"
                 Log.i(TAG, "Screen region selection overlay attached successfully")
             } catch (e: WindowManager.BadTokenException) {
-                handleAttachmentFailure("BadTokenException adding selection overlay", e, onCancelled)
+                handleAttachmentFailure("BadTokenException adding selection overlay", e)
             } catch (e: SecurityException) {
-                handleAttachmentFailure("SecurityException adding selection overlay", e, onCancelled)
+                handleAttachmentFailure("SecurityException adding selection overlay", e)
             } catch (e: IllegalStateException) {
-                handleAttachmentFailure("IllegalStateException adding selection overlay", e, onCancelled)
+                handleAttachmentFailure("IllegalStateException adding selection overlay", e)
             } catch (e: IllegalArgumentException) {
-                handleAttachmentFailure("IllegalArgumentException adding selection overlay", e, onCancelled)
+                handleAttachmentFailure("IllegalArgumentException adding selection overlay", e)
             } catch (e: Throwable) {
-                handleAttachmentFailure("Unexpected error adding selection overlay: ${e.message}", e, onCancelled)
+                handleAttachmentFailure("Unexpected error adding selection overlay: ${e.message}", e)
             }
         }
     }
 
-    private fun handleAttachmentFailure(reason: String, cause: Throwable, onCancelled: () -> Unit) {
+    private fun performCancel() {
+        val cb = synchronized(stateLock) {
+            if (currentState != SelectorState.Selecting && currentState != SelectorState.Showing) {
+                null
+            } else {
+                currentState = SelectorState.Cancelling
+                ReadMeCrashLogger.selectorState = "Cancelling"
+                val callback = pendingCancelledCallback
+                pendingCancelledCallback = null
+                pendingSelectedCallback = null
+                callback
+            }
+        }
+
+        // Section 9: Strict callback ordering:
+        // 1. mark selector as cancelling (done above)
+        // 2. remove selector touch surface & detach WindowManager view (in dismiss)
+        // 3. clear selector references (in dismiss)
+        // 4. update controller state to Idle (in dismiss)
+        // 5. notify caller exactly once
+        dismiss()
+
+        cb?.invoke()
+    }
+
+    private fun handleAttachmentFailure(reason: String, cause: Throwable) {
         Log.e(TAG, "$reason: ${cause.message}", cause)
         overlayView = null
         canvasViewRef = null
         currentState = SelectorState.Failed(reason, cause)
         ReadMeCrashLogger.isSelectionAttached = false
         ReadMeCrashLogger.selectorState = "Failed($reason)"
-        onCancelled()
+        val cb = pendingCancelledCallback
+        pendingCancelledCallback = null
+        pendingSelectedCallback = null
+        cb?.invoke()
     }
 
     private fun createDefaultSelection(bounds: Rect): Rect {
@@ -599,17 +634,20 @@ class ScreenRegionSelectionController(private val context: Context) {
 
             if (view != null) {
                 try {
+                    // Section 4 & 9: Instantly eliminate touch interception before removal
+                    view.visibility = View.GONE
+                    view.setOnTouchListener(null)
                     val wm = windowManager
                     if (wm != null) {
-                        if (view.isAttachedToWindow) {
-                            wm.removeView(view)
+                        try {
+                            wm.removeViewImmediate(view)
                             ReadMeCrashLogger.selectionRemoveCount.incrementAndGet()
-                        } else {
-                            try {
-                                wm.removeViewImmediate(view)
-                                ReadMeCrashLogger.selectionRemoveCount.incrementAndGet()
-                            } catch (_: Throwable) {
-                                // View was never attached or already detached
+                        } catch (_: Throwable) {
+                            if (view.isAttachedToWindow) {
+                                try {
+                                    wm.removeView(view)
+                                    ReadMeCrashLogger.selectionRemoveCount.incrementAndGet()
+                                } catch (_: Throwable) {}
                             }
                         }
                     }
@@ -641,6 +679,8 @@ class ScreenRegionSelectionController(private val context: Context) {
             dismiss()
             currentState = SelectorState.Destroyed
             ReadMeCrashLogger.selectorState = "Destroyed"
+            pendingCancelledCallback = null
+            pendingSelectedCallback = null
             Log.d(TAG, "ScreenRegionSelectionController destroyed")
         }
     }
