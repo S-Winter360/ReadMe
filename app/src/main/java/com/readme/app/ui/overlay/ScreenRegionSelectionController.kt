@@ -9,11 +9,12 @@ import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
-import android.util.DisplayMetrics
+import android.util.Log
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
@@ -27,26 +28,88 @@ import com.readme.app.accessibility.ScreenGeometryMapper
 import com.readme.app.diagnostics.ReadMeCrashLogger
 
 /**
+ * Deterministic selector state model according to Phase 9AE Section 3.
+ */
+sealed class SelectorState {
+    object Idle : SelectorState()
+    object Showing : SelectorState()
+    object Selecting : SelectorState()
+    object Confirming : SelectorState()
+    object Cancelling : SelectorState()
+    object Completed : SelectorState()
+    object Destroyed : SelectorState()
+    data class Failed(val reason: String, val cause: Throwable? = null) : SelectorState()
+
+    val name: String
+        get() = when (this) {
+            is Idle -> "Idle"
+            is Showing -> "Showing"
+            is Selecting -> "Selecting"
+            is Confirming -> "Confirming"
+            is Cancelling -> "Cancelling"
+            is Completed -> "Completed"
+            is Destroyed -> "Destroyed"
+            is Failed -> "Failed($reason)"
+        }
+}
+
+/**
  * Controller that displays a full-screen interactive overlay for selecting a reading region.
  *
- * Provides:
- * - Dimmed background with a clear selection cutout
- * - Draggable and resizable selection box
- * - Minimum size enforcement
- * - Explicit Cancel and Read (Confirm) actions
- * - Safe WindowManager lifecycle
+ * Hardened for Phase 9AE:
+ * - Deterministic State Machine (Idle, Showing, Selecting, Confirming, Cancelling, Completed, Destroyed, Failed)
+ * - Single attached selector globally across instances and per instance (no duplicate addView calls)
+ * - WindowManager exception safety (BadTokenException, SecurityException, IllegalStateException, IllegalArgumentException)
+ * - Proper window context (API 30+ createWindowContext for TYPE_APPLICATION_OVERLAY)
+ * - Multi-touch and gesture safety
+ * - Main thread affinity and safe destruction
  */
 class ScreenRegionSelectionController(private val context: Context) {
 
-    private val themedContext: Context = ContextThemeWrapper(context, R.style.Theme_ReadMe)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Section 6: Proper Window Context - create one stable window context for the controller
+    private val windowContext: Context = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        try {
+            context.createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+        } catch (_: Throwable) {
+            context
+        }
+    } else {
+        context
+    }
+
+    private val themedContext: Context = ContextThemeWrapper(windowContext, R.style.Theme_ReadMe)
 
     private val windowManager: WindowManager? =
-        context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        windowContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            ?: (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
 
+    private val stateLock = Any()
+
+    @Volatile
+    private var currentState: SelectorState = SelectorState.Idle
+
+    @Volatile
     private var overlayView: FrameLayout? = null
-    private var isAdded = false
 
-    fun isShowing(): Boolean = isAdded
+    @Volatile
+    private var canvasViewRef: View? = null
+
+    @Volatile
+    private var activeSelectionRect: Rect = Rect()
+
+    @Volatile
+    private var currentEffectiveBounds: Rect = Rect()
+
+    val isAttached: Boolean
+        get() = synchronized(stateLock) {
+            (currentState == SelectorState.Showing || currentState == SelectorState.Selecting) && overlayView != null
+        }
+
+    fun isShowing(): Boolean = isAttached
+
+    fun getState(): SelectorState = synchronized(stateLock) { currentState }
 
     @SuppressLint("ClickableViewAccessibility")
     fun show(
@@ -55,359 +118,460 @@ class ScreenRegionSelectionController(private val context: Context) {
         onRegionSelected: (Rect) -> Unit,
         onCancelled: () -> Unit
     ) {
-        if (isAdded) {
-            dismiss()
-        }
-
-        if (!Settings.canDrawOverlays(context)) {
-            onCancelled()
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post {
+                show(windowBounds, initialSelection, onRegionSelected, onCancelled)
+            }
             return
         }
 
-        val wm = windowManager ?: run {
-            onCancelled()
-            return
-        }
-
-        val realBounds = ScreenGeometryMapper.getRealDisplayBounds(context)
-        val screenW = realBounds.width().coerceAtLeast(720)
-        val screenH = realBounds.height().coerceAtLeast(1280)
-        val dm = context.resources.displayMetrics
-
-        val effectiveBounds = windowBounds?.takeIf { !it.isEmpty }
-            ?: Rect(0, 0, screenW, screenH)
-
-        // Initialize selection rectangle: restore previous selection if valid; otherwise default centered
-        val currentRect = if (initialSelection != null && !initialSelection.isEmpty) {
-            val norm = ScreenGeometryMapper.normalizeRect(initialSelection)
-            ScreenGeometryMapper.clampRegion(norm, effectiveBounds) ?: createDefaultSelection(effectiveBounds)
-        } else {
-            createDefaultSelection(effectiveBounds)
-        }
-
-        val root = FrameLayout(themedContext).apply {
-            setBackgroundColor(Color.TRANSPARENT)
-        }
-
-        // Custom Canvas View for rendering scrim cutout and selection border
-        val canvasView = object : View(themedContext) {
-            private val scrimPaint = Paint().apply {
-                color = Color.parseColor("#99000000") // 60% black scrim
-            }
-            private val clearPaint = Paint().apply {
-                xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-            }
-            private val borderPaint = Paint().apply {
-                color = Color.parseColor("#00B4D8") // ReadMe Cyan
-                style = Paint.Style.STROKE
-                strokeWidth = (2.5f * dm.density).coerceAtLeast(4f)
-                isAntiAlias = true
-            }
-            private val cornerPaint = Paint().apply {
-                color = Color.WHITE
-                style = Paint.Style.FILL
-                isAntiAlias = true
-            }
-
-            override fun onDraw(canvas: Canvas) {
-                super.onDraw(canvas)
-                try {
-                    val saveCount = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
-
-                    // Draw dark scrim over entire display
-                    canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), scrimPaint)
-
-                    // Cut out transparent hole for selected region
-                    canvas.drawRect(
-                        currentRect.left.toFloat(),
-                        currentRect.top.toFloat(),
-                        currentRect.right.toFloat(),
-                        currentRect.bottom.toFloat(),
-                        clearPaint
-                    )
-
-                    canvas.restoreToCount(saveCount)
-
-                    // Draw cyan border around selection
-                    canvas.drawRect(
-                        currentRect.left.toFloat(),
-                        currentRect.top.toFloat(),
-                        currentRect.right.toFloat(),
-                        currentRect.bottom.toFloat(),
-                        borderPaint
-                    )
-
-                    // Draw corner handles
-                    val handleSize = (14f * dm.density).coerceAtLeast(24f)
-                    val halfH = handleSize / 2f
-
-                    // Top-Left
-                    canvas.drawRect(currentRect.left - halfH, currentRect.top - halfH, currentRect.left + halfH, currentRect.top + halfH, cornerPaint)
-                    // Top-Right
-                    canvas.drawRect(currentRect.right - halfH, currentRect.top - halfH, currentRect.right + halfH, currentRect.top + halfH, cornerPaint)
-                    // Bottom-Left
-                    canvas.drawRect(currentRect.left - halfH, currentRect.bottom - halfH, currentRect.left + halfH, currentRect.bottom + halfH, cornerPaint)
-                    // Bottom-Right
-                    canvas.drawRect(currentRect.right - halfH, currentRect.bottom - halfH, currentRect.right + halfH, currentRect.bottom + halfH, cornerPaint)
-                } catch (_: Throwable) {
-                    // Prevent any drawing exception from crashing overlay
-                }
-            }
-        }
-
-        root.addView(
-            canvasView,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        )
-
-        // Top Header Chip
-        val header = TextView(themedContext).apply {
-            text = "Select the area to read"
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            setPadding(32, 16, 32, 16)
-            val bg = GradientDrawable().apply {
-                setColor(Color.parseColor("#D91E1E1E"))
-                cornerRadius = 16f * dm.density
-            }
-            background = bg
-            gravity = Gravity.CENTER
-            contentDescription = "Select the area to read"
-        }
-        val headerParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            topMargin = (screenH * 0.08f).toInt()
-        }
-        root.addView(header, headerParams)
-
-        // Bottom Action Controls Container
-        val buttonBar = LinearLayout(themedContext).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(24, 16, 24, 16)
-            val barBg = GradientDrawable().apply {
-                setColor(Color.parseColor("#F21E1E1E"))
-                cornerRadius = 24f * dm.density
-            }
-            background = barBg
-        }
-
-        val cancelButton = TextView(themedContext).apply {
-            text = "Cancel"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            gravity = Gravity.CENTER
-            val btnBg = GradientDrawable().apply {
-                setColor(Color.parseColor("#333333"))
-                cornerRadius = 16f * dm.density
-            }
-            background = btnBg
-            minHeight = (48 * dm.density).toInt()
-            contentDescription = "Cancel selection"
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                dismiss()
+        synchronized(stateLock) {
+            // Prevent Destroyed -> Showing
+            if (currentState == SelectorState.Destroyed) {
+                Log.w(TAG, "Cannot show selection overlay: controller is destroyed")
                 onCancelled()
+                return
             }
-        }
 
-        val spacer = View(themedContext)
+            // Section 4: If already attached in this instance, update current selection rather than adding another view
+            if (isAttached && overlayView != null) {
+                val realBounds = ScreenGeometryMapper.getRealDisplayBounds(context)
+                val screenW = realBounds.width().coerceAtLeast(720)
+                val screenH = realBounds.height().coerceAtLeast(1280)
+                val bounds = windowBounds?.takeIf { !it.isEmpty } ?: Rect(0, 0, screenW, screenH)
+                currentEffectiveBounds = bounds
 
-        val confirmButton = TextView(themedContext).apply {
-            text = "Read"
-            setTextColor(Color.parseColor("#121212"))
-            textSize = 14f
-            gravity = Gravity.CENTER
-            val btnBg = GradientDrawable().apply {
-                setColor(Color.parseColor("#00B4D8"))
-                cornerRadius = 16f * dm.density
-            }
-            background = btnBg
-            minHeight = (48 * dm.density).toInt()
-            contentDescription = "Confirm selection and read"
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                val loc = IntArray(2)
-                try {
-                    canvasView.getLocationOnScreen(loc)
-                } catch (_: Throwable) {}
-                val norm = ScreenGeometryMapper.normalizeRect(currentRect)
-                val onScreen = if (loc[0] != 0 || loc[1] != 0) {
-                    Rect(
-                        norm.left + loc[0],
-                        norm.top + loc[1],
-                        norm.right + loc[0],
-                        norm.bottom + loc[1]
-                    )
+                val newSelection = if (initialSelection != null && !initialSelection.isEmpty) {
+                    val norm = ScreenGeometryMapper.normalizeRect(initialSelection)
+                    ScreenGeometryMapper.clampRegion(norm, bounds) ?: createDefaultSelection(bounds)
                 } else {
-                    norm
+                    createDefaultSelection(bounds)
                 }
-                val clamped = ScreenGeometryMapper.clampRegion(onScreen, effectiveBounds) ?: onScreen
-                dismiss()
-                onRegionSelected(clamped)
+                activeSelectionRect.set(newSelection)
+                canvasViewRef?.invalidate()
+                Log.d(TAG, "Selection overlay already attached; updated selection region without re-adding view")
+                return
             }
-        }
 
-        buttonBar.addView(cancelButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        buttonBar.addView(spacer, LinearLayout.LayoutParams(32, 1))
-        buttonBar.addView(confirmButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            // Section 4: At most one ScreenRegionSelectionController instance may own an attached selector overlay at a time
+            activeAttachedInstance?.takeIf { it !== this }?.let { otherController ->
+                Log.i(TAG, "Dismissing previous active selector instance to enforce single attached selector")
+                otherController.dismiss()
+            }
 
-        val buttonBarParams = FrameLayout.LayoutParams(
-            (screenW * 0.85f).toInt(),
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            bottomMargin = (screenH * 0.08f).toInt()
-        }
-        root.addView(buttonBar, buttonBarParams)
+            // Verify overlay permission
+            if (!Settings.canDrawOverlays(context)) {
+                Log.w(TAG, "Overlay permission not granted; cannot show region selection")
+                currentState = SelectorState.Failed("Overlay permission unavailable")
+                ReadMeCrashLogger.selectorState = "Failed: PermissionUnavailable"
+                onCancelled()
+                return
+            }
 
-        // Touch handling: Drag / Resize / Free-drag in ANY direction
-        var touchMode = 0 // 0 = none, 1 = drag, 2 = resize TL, 3 = TR, 4 = BL, 5 = BR, 6 = free-draw
-        var initialDownX = 0f
-        var initialDownY = 0f
-        var lastTouchX = 0f
-        var lastTouchY = 0f
+            val wm = windowManager ?: run {
+                Log.e(TAG, "WindowManager unavailable; cannot show region selection")
+                currentState = SelectorState.Failed("WindowManager unavailable")
+                ReadMeCrashLogger.selectorState = "Failed: WindowManagerUnavailable"
+                onCancelled()
+                return
+            }
 
-        val handleRadius = (32f * dm.density).coerceAtLeast(48f)
+            // Prevent duplicate Showing transitions
+            currentState = SelectorState.Showing
+            ReadMeCrashLogger.selectorState = "Showing"
 
-        canvasView.setOnTouchListener { _, event ->
-            try {
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        initialDownX = event.x
-                        initialDownY = event.y
-                        lastTouchX = event.x
-                        lastTouchY = event.y
+            val realBounds = ScreenGeometryMapper.getRealDisplayBounds(context)
+            val screenW = realBounds.width().coerceAtLeast(720)
+            val screenH = realBounds.height().coerceAtLeast(1280)
+            val dm = context.resources.displayMetrics
 
-                        // Test corner hits first
-                        val dTL = Math.hypot((event.x - currentRect.left).toDouble(), (event.y - currentRect.top).toDouble())
-                        val dTR = Math.hypot((event.x - currentRect.right).toDouble(), (event.y - currentRect.top).toDouble())
-                        val dBL = Math.hypot((event.x - currentRect.left).toDouble(), (event.y - currentRect.bottom).toDouble())
-                        val dBR = Math.hypot((event.x - currentRect.right).toDouble(), (event.y - currentRect.bottom).toDouble())
+            val effectiveBounds = windowBounds?.takeIf { !it.isEmpty }
+                ?: Rect(0, 0, screenW, screenH)
+            currentEffectiveBounds = effectiveBounds
 
-                        touchMode = when {
-                            dTL <= handleRadius -> 2
-                            dTR <= handleRadius -> 3
-                            dBL <= handleRadius -> 4
-                            dBR <= handleRadius -> 5
-                            currentRect.contains(event.x.toInt(), event.y.toInt()) -> 1 // drag box
-                            else -> 6 // outside: drag out a brand new selection box
-                        }
-                        true
+            // Initialize selection rectangle
+            val currentRect = if (initialSelection != null && !initialSelection.isEmpty) {
+                val norm = ScreenGeometryMapper.normalizeRect(initialSelection)
+                ScreenGeometryMapper.clampRegion(norm, effectiveBounds) ?: createDefaultSelection(effectiveBounds)
+            } else {
+                createDefaultSelection(effectiveBounds)
+            }
+            activeSelectionRect = currentRect
+
+            val root = FrameLayout(themedContext).apply {
+                setBackgroundColor(Color.TRANSPARENT)
+            }
+
+            // Custom Canvas View for rendering scrim cutout and selection border
+            val canvasView = object : View(themedContext) {
+                private val scrimPaint = Paint().apply {
+                    color = Color.parseColor("#99000000") // 60% black scrim
+                }
+                private val clearPaint = Paint().apply {
+                    xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+                }
+                private val borderPaint = Paint().apply {
+                    color = Color.parseColor("#00B4D8") // ReadMe Cyan
+                    style = Paint.Style.STROKE
+                    strokeWidth = (2.5f * dm.density).coerceAtLeast(4f)
+                    isAntiAlias = true
+                }
+                private val cornerPaint = Paint().apply {
+                    color = Color.WHITE
+                    style = Paint.Style.FILL
+                    isAntiAlias = true
+                }
+
+                override fun onDraw(canvas: Canvas) {
+                    super.onDraw(canvas)
+                    try {
+                        val saveCount = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), null)
+
+                        // Draw dark scrim over entire display
+                        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), scrimPaint)
+
+                        // Cut out transparent hole for selected region
+                        canvas.drawRect(
+                            currentRect.left.toFloat(),
+                            currentRect.top.toFloat(),
+                            currentRect.right.toFloat(),
+                            currentRect.bottom.toFloat(),
+                            clearPaint
+                        )
+
+                        canvas.restoreToCount(saveCount)
+
+                        // Draw cyan border around selection
+                        canvas.drawRect(
+                            currentRect.left.toFloat(),
+                            currentRect.top.toFloat(),
+                            currentRect.right.toFloat(),
+                            currentRect.bottom.toFloat(),
+                            borderPaint
+                        )
+
+                        // Draw corner handles
+                        val handleSize = (14f * dm.density).coerceAtLeast(24f)
+                        val halfH = handleSize / 2f
+
+                        // Top-Left
+                        canvas.drawRect(currentRect.left - halfH, currentRect.top - halfH, currentRect.left + halfH, currentRect.top + halfH, cornerPaint)
+                        // Top-Right
+                        canvas.drawRect(currentRect.right - halfH, currentRect.top - halfH, currentRect.right + halfH, currentRect.top + halfH, cornerPaint)
+                        // Bottom-Left
+                        canvas.drawRect(currentRect.left - halfH, currentRect.bottom - halfH, currentRect.left + halfH, currentRect.bottom + halfH, cornerPaint)
+                        // Bottom-Right
+                        canvas.drawRect(currentRect.right - halfH, currentRect.bottom - halfH, currentRect.right + halfH, currentRect.bottom + halfH, cornerPaint)
+                    } catch (_: Throwable) {
+                        // Prevent any drawing exception from crashing overlay
                     }
-                    MotionEvent.ACTION_MOVE -> {
-                        val dx = (event.x - lastTouchX).toInt()
-                        val dy = (event.y - lastTouchY).toInt()
+                }
+            }
+            canvasViewRef = canvasView
 
-                        when (touchMode) {
-                            1 -> {
-                                // Translate whole rect
-                                val newL = (currentRect.left + dx).coerceIn(effectiveBounds.left, effectiveBounds.right - currentRect.width())
-                                val newT = (currentRect.top + dy).coerceIn(effectiveBounds.top, effectiveBounds.bottom - currentRect.height())
-                                currentRect.offsetTo(newL, newT)
-                            }
-                            2 -> {
-                                // Resize Top-Left
-                                currentRect.left = (currentRect.left + dx).coerceIn(effectiveBounds.left, currentRect.right - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
-                                currentRect.top = (currentRect.top + dy).coerceIn(effectiveBounds.top, currentRect.bottom - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
-                            }
-                            3 -> {
-                                // Resize Top-Right
-                                currentRect.right = (currentRect.right + dx).coerceIn(currentRect.left + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.right)
-                                currentRect.top = (currentRect.top + dy).coerceIn(effectiveBounds.top, currentRect.bottom - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
-                            }
-                            4 -> {
-                                // Resize Bottom-Left
-                                currentRect.left = (currentRect.left + dx).coerceIn(effectiveBounds.left, currentRect.right - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
-                                currentRect.bottom = (currentRect.bottom + dy).coerceIn(currentRect.top + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.bottom)
-                            }
-                            5 -> {
-                                // Resize Bottom-Right
-                                currentRect.right = (currentRect.right + dx).coerceIn(currentRect.left + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.right)
-                                currentRect.bottom = (currentRect.bottom + dy).coerceIn(currentRect.top + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.bottom)
-                            }
-                            6 -> {
-                                // Free-drag rectangle from initial touch down point to current touch
-                                val rawL = minOf(initialDownX, event.x).toInt().coerceIn(effectiveBounds.left, effectiveBounds.right)
-                                val rawR = maxOf(initialDownX, event.x).toInt().coerceIn(effectiveBounds.left, effectiveBounds.right)
-                                val rawT = minOf(initialDownY, event.y).toInt().coerceIn(effectiveBounds.top, effectiveBounds.bottom)
-                                val rawB = maxOf(initialDownY, event.y).toInt().coerceIn(effectiveBounds.top, effectiveBounds.bottom)
+            root.addView(
+                canvasView,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
 
-                                if ((rawR - rawL) >= ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX &&
-                                    (rawB - rawT) >= ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX) {
-                                    currentRect.set(rawL, rawT, rawR, rawB)
+            // Top Header Chip
+            val header = TextView(themedContext).apply {
+                text = "Select the area to read"
+                setTextColor(Color.WHITE)
+                textSize = 15f
+                setPadding(32, 16, 32, 16)
+                val bg = GradientDrawable().apply {
+                    setColor(Color.parseColor("#D91E1E1E"))
+                    cornerRadius = 16f * dm.density
+                }
+                background = bg
+                gravity = Gravity.CENTER
+                contentDescription = "Select the area to read"
+            }
+            val headerParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = (screenH * 0.08f).toInt()
+            }
+            root.addView(header, headerParams)
+
+            // Bottom Action Controls Container
+            val buttonBar = LinearLayout(themedContext).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                setPadding(24, 16, 24, 16)
+                val barBg = GradientDrawable().apply {
+                    setColor(Color.parseColor("#F21E1E1E"))
+                    cornerRadius = 24f * dm.density
+                }
+                background = barBg
+            }
+
+            val cancelButton = TextView(themedContext).apply {
+                text = "Cancel"
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                val btnBg = GradientDrawable().apply {
+                    setColor(Color.parseColor("#333333"))
+                    cornerRadius = 16f * dm.density
+                }
+                background = btnBg
+                minHeight = (48 * dm.density).toInt()
+                contentDescription = "Cancel selection"
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    synchronized(stateLock) {
+                        // Prevent duplicate cancellation or confirm-after-cancel
+                        if (currentState != SelectorState.Selecting && currentState != SelectorState.Showing) {
+                            return@setOnClickListener
+                        }
+                        currentState = SelectorState.Cancelling
+                        ReadMeCrashLogger.selectorState = "Cancelling"
+                    }
+                    dismiss()
+                    synchronized(stateLock) {
+                        currentState = SelectorState.Idle
+                        ReadMeCrashLogger.selectorState = "Idle"
+                    }
+                    onCancelled()
+                }
+            }
+
+            val spacer = View(themedContext)
+
+            val confirmButton = TextView(themedContext).apply {
+                text = "Read"
+                setTextColor(Color.parseColor("#121212"))
+                textSize = 14f
+                gravity = Gravity.CENTER
+                val btnBg = GradientDrawable().apply {
+                    setColor(Color.parseColor("#00B4D8"))
+                    cornerRadius = 16f * dm.density
+                }
+                background = btnBg
+                minHeight = (48 * dm.density).toInt()
+                contentDescription = "Confirm selection and read"
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    synchronized(stateLock) {
+                        // Prevent duplicate confirmation (Confirming -> Confirming) or Cancelling -> Confirming
+                        if (currentState != SelectorState.Selecting && currentState != SelectorState.Showing) {
+                            return@setOnClickListener
+                        }
+                        currentState = SelectorState.Confirming
+                        ReadMeCrashLogger.selectorState = "Confirming"
+                    }
+
+                    val loc = IntArray(2)
+                    try {
+                        canvasView.getLocationOnScreen(loc)
+                    } catch (_: Throwable) {}
+                    val norm = ScreenGeometryMapper.normalizeRect(currentRect)
+                    val onScreen = if (loc[0] != 0 || loc[1] != 0) {
+                        Rect(
+                            norm.left + loc[0],
+                            norm.top + loc[1],
+                            norm.right + loc[0],
+                            norm.bottom + loc[1]
+                        )
+                    } else {
+                        norm
+                    }
+                    val clamped = ScreenGeometryMapper.clampRegion(onScreen, effectiveBounds) ?: onScreen
+                    dismiss()
+                    synchronized(stateLock) {
+                        currentState = SelectorState.Completed
+                        ReadMeCrashLogger.selectorState = "Completed"
+                    }
+                    onRegionSelected(clamped)
+                }
+            }
+
+            buttonBar.addView(cancelButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            buttonBar.addView(spacer, LinearLayout.LayoutParams(32, 1))
+            buttonBar.addView(confirmButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            val buttonBarParams = FrameLayout.LayoutParams(
+                (screenW * 0.85f).toInt(),
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                bottomMargin = (screenH * 0.08f).toInt()
+            }
+            root.addView(buttonBar, buttonBarParams)
+
+            // Touch handling: Drag / Resize / Free-drag in ANY direction
+            var touchMode = 0 // 0 = none, 1 = drag, 2 = resize TL, 3 = TR, 4 = BL, 5 = BR, 6 = free-draw
+            var initialDownX = 0f
+            var initialDownY = 0f
+            var lastTouchX = 0f
+            var lastTouchY = 0f
+
+            val handleRadius = (32f * dm.density).coerceAtLeast(48f)
+
+            canvasView.setOnTouchListener { _, event ->
+                // Guard touch events against invalid state machine phases
+                val state = synchronized(stateLock) { currentState }
+                if (state != SelectorState.Selecting && state != SelectorState.Showing) {
+                    return@setOnTouchListener false
+                }
+
+                try {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            initialDownX = event.x
+                            initialDownY = event.y
+                            lastTouchX = event.x
+                            lastTouchY = event.y
+
+                            // Test corner hits first
+                            val dTL = Math.hypot((event.x - currentRect.left).toDouble(), (event.y - currentRect.top).toDouble())
+                            val dTR = Math.hypot((event.x - currentRect.right).toDouble(), (event.y - currentRect.top).toDouble())
+                            val dBL = Math.hypot((event.x - currentRect.left).toDouble(), (event.y - currentRect.bottom).toDouble())
+                            val dBR = Math.hypot((event.x - currentRect.right).toDouble(), (event.y - currentRect.bottom).toDouble())
+
+                            touchMode = when {
+                                dTL <= handleRadius -> 2
+                                dTR <= handleRadius -> 3
+                                dBL <= handleRadius -> 4
+                                dBR <= handleRadius -> 5
+                                currentRect.contains(event.x.toInt(), event.y.toInt()) -> 1 // drag box
+                                else -> 6 // outside: drag out a brand new selection box
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val dx = (event.x - lastTouchX).toInt()
+                            val dy = (event.y - lastTouchY).toInt()
+
+                            when (touchMode) {
+                                1 -> {
+                                    // Translate whole rect
+                                    val newL = (currentRect.left + dx).coerceIn(effectiveBounds.left, (effectiveBounds.right - currentRect.width()).coerceAtLeast(effectiveBounds.left))
+                                    val newT = (currentRect.top + dy).coerceIn(effectiveBounds.top, (effectiveBounds.bottom - currentRect.height()).coerceAtLeast(effectiveBounds.top))
+                                    currentRect.offsetTo(newL, newT)
+                                }
+                                2 -> {
+                                    // Resize Top-Left
+                                    currentRect.left = (currentRect.left + dx).coerceIn(effectiveBounds.left, currentRect.right - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
+                                    currentRect.top = (currentRect.top + dy).coerceIn(effectiveBounds.top, currentRect.bottom - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
+                                }
+                                3 -> {
+                                    // Resize Top-Right
+                                    currentRect.right = (currentRect.right + dx).coerceIn(currentRect.left + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.right)
+                                    currentRect.top = (currentRect.top + dy).coerceIn(effectiveBounds.top, currentRect.bottom - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
+                                }
+                                4 -> {
+                                    // Resize Bottom-Left
+                                    currentRect.left = (currentRect.left + dx).coerceIn(effectiveBounds.left, currentRect.right - ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX)
+                                    currentRect.bottom = (currentRect.bottom + dy).coerceIn(currentRect.top + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.bottom)
+                                }
+                                5 -> {
+                                    // Resize Bottom-Right
+                                    currentRect.right = (currentRect.right + dx).coerceIn(currentRect.left + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.right)
+                                    currentRect.bottom = (currentRect.bottom + dy).coerceIn(currentRect.top + ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX, effectiveBounds.bottom)
+                                }
+                                6 -> {
+                                    // Free-drag rectangle from initial touch down point to current touch
+                                    val rawL = minOf(initialDownX, event.x).toInt().coerceIn(effectiveBounds.left, effectiveBounds.right)
+                                    val rawR = maxOf(initialDownX, event.x).toInt().coerceIn(effectiveBounds.left, effectiveBounds.right)
+                                    val rawT = minOf(initialDownY, event.y).toInt().coerceIn(effectiveBounds.top, effectiveBounds.bottom)
+                                    val rawB = maxOf(initialDownY, event.y).toInt().coerceIn(effectiveBounds.top, effectiveBounds.bottom)
+
+                                    if ((rawR - rawL) >= ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX &&
+                                        (rawB - rawT) >= ScreenGeometryMapper.DEFAULT_MIN_SIZE_PX) {
+                                        currentRect.set(rawL, rawT, rawR, rawB)
+                                    }
                                 }
                             }
+                            lastTouchX = event.x
+                            lastTouchY = event.y
+                            canvasView.invalidate()
+                            true
                         }
-                        lastTouchX = event.x
-                        lastTouchY = event.y
-                        canvasView.invalidate()
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        touchMode = 0
-                        // Normalize rect bounds on release
-                        val norm = ScreenGeometryMapper.normalizeRect(currentRect)
-                        val clamped = ScreenGeometryMapper.clampRegion(norm, effectiveBounds)
-                        if (clamped != null) {
-                            currentRect.set(clamped)
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            touchMode = 0
+                            // Normalize rect bounds on release
+                            val norm = ScreenGeometryMapper.normalizeRect(currentRect)
+                            val clamped = ScreenGeometryMapper.clampRegion(norm, effectiveBounds)
+                            if (clamped != null) {
+                                currentRect.set(clamped)
+                            }
+                            canvasView.invalidate()
+                            true
                         }
-                        canvasView.invalidate()
-                        true
+                        else -> false
                     }
-                    else -> false
-                }
-            } catch (_: Throwable) {
-                false
-            }
-        }
-
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = 0
-            y = 0
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-                } else {
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                } catch (_: Throwable) {
+                    false
                 }
             }
-        }
 
-        try {
-            wm.addView(root, params)
-            overlayView = root
-            isAdded = true
-            ReadMeCrashLogger.selectionAddCount.incrementAndGet()
-            ReadMeCrashLogger.isSelectionAttached = true
-        } catch (e: Throwable) {
-            android.util.Log.e("ReadMeCrash", "Failed to add selection overlay window", e)
-            isAdded = false
-            ReadMeCrashLogger.isSelectionAttached = false
-            overlayView = null
-            onCancelled()
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = 0
+                y = 0
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                    } else {
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                }
+            }
+
+            // Section 5: WindowManager Safety - Audit and guard addView
+            try {
+                wm.addView(root, params)
+                overlayView = root
+                currentState = SelectorState.Selecting
+                activeAttachedInstance = this
+                ReadMeCrashLogger.selectionAddCount.incrementAndGet()
+                ReadMeCrashLogger.isSelectionAttached = true
+                ReadMeCrashLogger.selectorState = "Selecting"
+                Log.i(TAG, "Screen region selection overlay attached successfully")
+            } catch (e: WindowManager.BadTokenException) {
+                handleAttachmentFailure("BadTokenException adding selection overlay", e, onCancelled)
+            } catch (e: SecurityException) {
+                handleAttachmentFailure("SecurityException adding selection overlay", e, onCancelled)
+            } catch (e: IllegalStateException) {
+                handleAttachmentFailure("IllegalStateException adding selection overlay", e, onCancelled)
+            } catch (e: IllegalArgumentException) {
+                handleAttachmentFailure("IllegalArgumentException adding selection overlay", e, onCancelled)
+            } catch (e: Throwable) {
+                handleAttachmentFailure("Unexpected error adding selection overlay: ${e.message}", e, onCancelled)
+            }
         }
+    }
+
+    private fun handleAttachmentFailure(reason: String, cause: Throwable, onCancelled: () -> Unit) {
+        Log.e(TAG, "$reason: ${cause.message}", cause)
+        overlayView = null
+        canvasViewRef = null
+        currentState = SelectorState.Failed(reason, cause)
+        ReadMeCrashLogger.isSelectionAttached = false
+        ReadMeCrashLogger.selectorState = "Failed($reason)"
+        onCancelled()
     }
 
     private fun createDefaultSelection(bounds: Rect): Rect {
@@ -419,19 +583,77 @@ class ScreenRegionSelectionController(private val context: Context) {
     }
 
     fun dismiss() {
-        if (isAdded) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { dismiss() }
+            return
+        }
+
+        synchronized(stateLock) {
             val view = overlayView
-            try {
-                if (view != null) {
-                    windowManager?.removeView(view)
-                    ReadMeCrashLogger.selectionRemoveCount.incrementAndGet()
-                }
-            } catch (_: Throwable) {
-            } finally {
-                overlayView = null
-                isAdded = false
-                ReadMeCrashLogger.isSelectionAttached = false
+            overlayView = null
+            canvasViewRef = null
+
+            if (activeAttachedInstance === this) {
+                activeAttachedInstance = null
             }
+
+            if (view != null) {
+                try {
+                    val wm = windowManager
+                    if (wm != null) {
+                        if (view.isAttachedToWindow) {
+                            wm.removeView(view)
+                            ReadMeCrashLogger.selectionRemoveCount.incrementAndGet()
+                        } else {
+                            try {
+                                wm.removeViewImmediate(view)
+                                ReadMeCrashLogger.selectionRemoveCount.incrementAndGet()
+                            } catch (_: Throwable) {
+                                // View was never attached or already detached
+                            }
+                        }
+                    }
+                } catch (e: IllegalArgumentException) {
+                    Log.w(TAG, "Selector view was already not attached to WindowManager: ${e.message}")
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "IllegalStateException removing selector view: ${e.message}")
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Unexpected error removing selector overlay: ${e.message}")
+                } finally {
+                    ReadMeCrashLogger.isSelectionAttached = false
+                }
+            }
+
+            if (currentState != SelectorState.Destroyed) {
+                currentState = SelectorState.Idle
+                ReadMeCrashLogger.selectorState = "Idle"
+            }
+        }
+    }
+
+    fun destroy() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { destroy() }
+            return
+        }
+
+        synchronized(stateLock) {
+            dismiss()
+            currentState = SelectorState.Destroyed
+            ReadMeCrashLogger.selectorState = "Destroyed"
+            Log.d(TAG, "ScreenRegionSelectionController destroyed")
+        }
+    }
+
+    companion object {
+        private const val TAG = "ScreenRegionSelection"
+
+        @Volatile
+        private var activeAttachedInstance: ScreenRegionSelectionController? = null
+
+        @androidx.annotation.VisibleForTesting
+        fun resetActiveInstance() {
+            activeAttachedInstance = null
         }
     }
 }

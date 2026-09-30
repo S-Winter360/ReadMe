@@ -78,6 +78,9 @@ class ReadMeReadingService : Service() {
             calibrationRepository = com.readme.app.accessibility.autonav.PageTurnCalibrationRepository.getInstance(applicationContext)
         )
 
+        ReadMeCrashLogger.serviceConnectionState = if (ReadMeAccessibilityService.isConnected) "Connected" else "ServiceCreated"
+        ReadMeCrashLogger.activeSessionGeneration = sessionRuntime.currentSessionGeneration
+
         val foregroundAndPickerFlow = combine(
             sessionRuntime.appForegroundState,
             sessionRuntime.isDocumentPickerActive
@@ -129,6 +132,9 @@ class ReadMeReadingService : Service() {
             ReadMeAccessibilityService.activePackageFlow.collect { activePkg ->
                 if (!activePkg.isNullOrBlank()) {
                     calibrationController?.checkAndTriggerIfArmed(activePkg)
+                    if (activePkg == packageName && selectionController?.isShowing() == true) {
+                        selectionController?.dismiss()
+                    }
                 }
                 val docState = sessionRuntime.activeDocumentState.value
                 if (docState.isEphemeral && !docState.sourcePackageName.isNullOrBlank()) {
@@ -216,6 +222,8 @@ class ReadMeReadingService : Service() {
         val canDraw = Settings.canDrawOverlays(this)
         ReadMeCrashLogger.currentReadingState = if (state.sessionState.isReading) "Reading" else "Idle"
         ReadMeCrashLogger.isAppForeground = state.isForeground
+        ReadMeCrashLogger.serviceConnectionState = if (ReadMeAccessibilityService.isConnected) "Connected" else "Disconnected"
+        ReadMeCrashLogger.activeSessionGeneration = sessionRuntime.currentSessionGeneration
 
         val visibilityState = BubbleLifecyclePolicy.computeVisibilityState(
             isFloatingEnabled = state.settings.isFloatingReadmeEnabled,
@@ -453,11 +461,17 @@ class ReadMeReadingService : Service() {
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.UnknownError -> "Unable to read selected screen."
                         else -> "Unable to read text."
                     }
-                    Toast.makeText(this@ReadMeReadingService, msg, Toast.LENGTH_SHORT).show()
+                    try {
+                        Toast.makeText(this@ReadMeReadingService, msg, Toast.LENGTH_SHORT).show()
+                    } catch (_: Throwable) {}
                 }
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "executeAcquisitionFlow cancelled")
             } catch (t: Throwable) {
                 Log.e(TAG, "Error in executeAcquisitionFlow coroutine", t)
-                Toast.makeText(this@ReadMeReadingService, "Screen reading error: ${t.message ?: "unexpected error"}", Toast.LENGTH_SHORT).show()
+                try {
+                    Toast.makeText(this@ReadMeReadingService, "Screen reading error: ${t.message ?: "unexpected error"}", Toast.LENGTH_SHORT).show()
+                } catch (_: Throwable) {}
             }
         }
     }
@@ -541,7 +555,7 @@ class ReadMeReadingService : Service() {
             instance = null
         }
         bubbleController?.destroy()
-        selectionController?.dismiss()
+        selectionController?.destroy()
         highlightOverlayController?.destroy()
         bubbleController = null
         selectionController = null

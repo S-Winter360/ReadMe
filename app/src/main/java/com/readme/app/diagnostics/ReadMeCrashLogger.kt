@@ -44,7 +44,10 @@ object ReadMeCrashLogger {
     @Volatile var currentControllerInstanceId: Long = 0L
     @Volatile var currentLifecycleState: String = "Initialized"
     @Volatile var bubbleControllerState: String = "Hidden"
+    @Volatile var selectorState: String = "Idle"
     @Volatile var overlayPermissionGranted: Boolean = false
+    @Volatile var serviceConnectionState: String = "Disconnected"
+    @Volatile var activeSessionGeneration: Long = 0L
     @Volatile var isBubbleViewAttached: Boolean = false
     @Volatile var isSelectionAttached: Boolean = false
     @Volatile var isAppForeground: Boolean = false
@@ -65,7 +68,10 @@ object ReadMeCrashLogger {
         val controllerInstanceId: Long = 0L,
         val lifecycleState: String = "",
         val bubbleState: String = "",
+        val selectorState: String = "Idle",
         val overlayPermission: Boolean = false,
+        val serviceConnectionState: String = "",
+        val activeSessionGeneration: Long = 0L,
         val bubbleAttached: Boolean = false,
         val selectionAttached: Boolean = false,
         val appForeground: Boolean = false,
@@ -128,7 +134,10 @@ object ReadMeCrashLogger {
             controllerInstanceId = currentControllerInstanceId,
             lifecycleState = currentLifecycleState,
             bubbleState = bubbleControllerState,
+            selectorState = selectorState,
             overlayPermission = overlayPermissionGranted,
+            serviceConnectionState = serviceConnectionState,
+            activeSessionGeneration = activeSessionGeneration,
             bubbleAttached = isBubbleViewAttached,
             selectionAttached = isSelectionAttached,
             appForeground = isAppForeground,
@@ -150,6 +159,7 @@ object ReadMeCrashLogger {
             appendLine("Lifecycle State: ${crashInfo.lifecycleState}, Foreground: ${crashInfo.appForeground}")
             appendLine("Service Instance ID: ${crashInfo.serviceInstanceId}, Controller Instance ID: ${crashInfo.controllerInstanceId}")
             appendLine("Bubble State: ${crashInfo.bubbleState}, Overlay Permission: ${crashInfo.overlayPermission}")
+            appendLine("Selector State: ${crashInfo.selectorState}, Service Connection: ${crashInfo.serviceConnectionState}, Session Gen: ${crashInfo.activeSessionGeneration}")
             appendLine("Bubble Attached: ${crashInfo.bubbleAttached} (Adds: ${crashInfo.bubbleAddTotal}, Removes: ${crashInfo.bubbleRemoveTotal})")
             appendLine("Selection Attached: ${crashInfo.selectionAttached} (Adds: ${crashInfo.selectionAddTotal}, Removes: ${crashInfo.selectionRemoveTotal})")
             appendLine("Reading State: ${crashInfo.readingState}")
