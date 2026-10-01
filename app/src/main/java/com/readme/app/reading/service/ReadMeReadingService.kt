@@ -309,7 +309,16 @@ class ReadMeReadingService : Service() {
                 },
                 onCloseBubble = {
                     autoNavigationCoordinator?.reset()
+                    if (sessionRuntime.readingSessionState.value.isReading) {
+                        sessionRuntime.stopReading()
+                    }
+                    highlightOverlayController?.clearHighlight()
+                    selectionController?.dismiss()
+                    if (sessionRuntime.isEphemeralActive) {
+                        sessionRuntime.returnToPrimaryDocument()
+                    }
                     sessionRuntime.closeBubbleByUser()
+                    bubbleController?.hide()
                 },
                 onAcquireMode = { mode ->
                     startAcquisition(mode)
@@ -473,7 +482,7 @@ class ReadMeReadingService : Service() {
             } catch (t: Throwable) {
                 Log.e(TAG, "Error in executeAcquisitionFlow coroutine", t)
                 try {
-                    Toast.makeText(this@ReadMeReadingService, "Screen reading error: ${t.message ?: "unexpected error"}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@ReadMeReadingService, "Screen reading was interrupted. Please try again.", Toast.LENGTH_SHORT).show()
                 } catch (_: Throwable) {}
             }
         }

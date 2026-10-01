@@ -5,8 +5,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -40,6 +41,7 @@ fun HowToUseScreen(onNavigateBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 24.dp)
+                .verticalScroll(rememberScrollState())
         ) {
             Spacer(modifier = Modifier.height(16.dp))
             
@@ -56,16 +58,34 @@ fun HowToUseScreen(onNavigateBack: () -> Unit) {
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             Text(
-                text = "3. Open supported content using \"Open Content\".",
+                text = "3. Open supported content using \"Open Content\" (TXT, EPUB, and PDF).",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             Text(
-                text = "4. Tap \"Start Reading\" when you are ready.",
+                text = "4. Tap \"Start Reading\" when you are ready to listen with real-time word highlighting.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(bottom = 16.dp)
+            )
+            Text(
+                text = "5. For reading outside ReadMe, enable \"Floating ReadMe\" and accessibility in Settings.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            Text(
+                text = "6. Screen Region Selection: Use \"Read Screen\" to select the exact story or text area. When reading novel reader apps, selecting the reading area is recommended to focus exclusively on story text and avoid reader headers, status bars, or bottom navigation chrome.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+            Text(
+                text = "7. Novel Page-Turn Calibration: In paginated novel readers, use \"Calibrate Next Page\" in Settings to show ReadMe where you tap to advance pages.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.padding(bottom = 24.dp)
             )
         }
     }
