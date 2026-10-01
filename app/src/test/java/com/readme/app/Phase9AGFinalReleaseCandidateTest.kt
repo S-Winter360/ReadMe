@@ -448,24 +448,18 @@ class Phase9AGFinalReleaseCandidateTest {
         var isSelectorVisible = false
         var isBubbleClosedByUser = false
 
-        // User triggers Close Bubble action (dragged to close target or close button tapped)
+        // User triggers Close Bubble action: hides bubble UI only
         fun onCloseBubbleAction() {
-            if (engine.readingState.value == ReadingSessionState.Reading) {
-                coordinator.stopReading()
-            }
-            isHighlightVisible = false
-            isSelectorVisible = false
             isBubbleClosedByUser = true
         }
 
         onCloseBubbleAction()
 
-        // 1. Reading must be stopped
-        assertEquals(ReadingSessionState.Stopped, engine.readingState.value)
+        // 1. Close Bubble does NOT stop reading
+        assertEquals(ReadingSessionState.Reading, engine.readingState.value)
 
-        // 2. All overlays must be detached/hidden
-        assertFalse(isHighlightVisible)
-        assertFalse(isSelectorVisible)
+        // 2. Highlight remains active
+        assertTrue(isHighlightVisible)
         assertTrue(isBubbleClosedByUser)
 
         // 3. BubbleLifecyclePolicy reports HiddenByUser
@@ -478,16 +472,26 @@ class Phase9AGFinalReleaseCandidateTest {
         )
         assertEquals(BubbleVisibilityState.HiddenByUser, visibilityAfterClose)
 
-        // 4. When user re-enters ReadMe and leaves again: bubble becomes available again
+        // 4. Reopen bubble restores controls while reading remains active
         isBubbleClosedByUser = false
-        val visibilityAfterLeaveAgain = BubbleLifecyclePolicy.computeVisibilityState(
+        val visibilityAfterReopen = BubbleLifecyclePolicy.computeVisibilityState(
             isFloatingEnabled = true,
             hasOverlayPermission = true,
             isForeground = false,
             isClosedByUser = isBubbleClosedByUser,
             isDocumentPickerActive = false
         )
-        assertEquals(BubbleVisibilityState.Visible, visibilityAfterLeaveAgain)
+        assertEquals(BubbleVisibilityState.Visible, visibilityAfterReopen)
+        assertEquals(ReadingSessionState.Reading, engine.readingState.value)
+
+        // 5. Tapping Stop terminates reading and clears highlight
+        fun onStopAction() {
+            coordinator.stopReading()
+            isHighlightVisible = false
+        }
+        onStopAction()
+        assertEquals(ReadingSessionState.Stopped, engine.readingState.value)
+        assertFalse(isHighlightVisible)
     }
 
     // =========================================================================

@@ -308,15 +308,6 @@ class ReadMeReadingService : Service() {
                     sessionRuntime.returnToPrimaryDocument()
                 },
                 onCloseBubble = {
-                    autoNavigationCoordinator?.reset()
-                    if (sessionRuntime.readingSessionState.value.isReading) {
-                        sessionRuntime.stopReading()
-                    }
-                    highlightOverlayController?.clearHighlight()
-                    selectionController?.dismiss()
-                    if (sessionRuntime.isEphemeralActive) {
-                        sessionRuntime.returnToPrimaryDocument()
-                    }
                     sessionRuntime.closeBubbleByUser()
                     bubbleController?.hide()
                 },
