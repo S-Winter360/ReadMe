@@ -26,15 +26,41 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        create("release") {
+            val storeFilePath = System.getenv("README_KEYSTORE_FILE")
+                ?: (findProperty("readmeKeystoreFile") as? String)
+            val storePass = System.getenv("README_KEYSTORE_PASSWORD")
+                ?: (findProperty("readmeKeystorePassword") as? String)
+            val keyAl = System.getenv("README_KEY_ALIAS")
+                ?: (findProperty("readmeKeyAlias") as? String)
+            val keyPass = System.getenv("README_KEY_PASSWORD")
+                ?: (findProperty("readmeKeyPassword") as? String)
+
+            if (!storeFilePath.isNullOrBlank() && !storePass.isNullOrBlank() && !keyAl.isNullOrBlank() && !keyPass.isNullOrBlank()) {
+                val file = file(storeFilePath)
+                if (file.exists()) {
+                    storeFile = file
+                    storePassword = storePass
+                    keyAlias = keyAl
+                    keyPassword = keyPass
+                }
+            }
+        }
     }
 
     buildTypes {
         release {
+            isDebuggable = false
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile != null && releaseSigning.storeFile!!.exists()) {
+                signingConfig = releaseSigning
+            }
             optimization {
                 enable = false
             }
         }
         debug {
+            isDebuggable = true
             signingConfig = signingConfigs.getByName("debugConfig")
         }
     }

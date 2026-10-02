@@ -108,25 +108,27 @@ object ScreenOcrDiagnostics {
             history.pollFirst()
         }
         history.addLast(record)
-        try {
-            Log.d(
-                TAG,
-                "Target: ${record.targetPackageName} (winId=${record.targetWindowId}, bounds=${record.windowBounds}), " +
-                    "Display: ${record.displayWidth}x${record.displayHeight}, " +
-                    "Screenshot: ${record.screenshotWidth}x${record.screenshotHeight} (originMode=${record.originMode}), " +
-                    "SelectionUI: ${record.selectionInUi} -> Norm: ${record.normalizedSelection}, " +
-                    "Crop: ${record.convertedCropRect} (${record.cropWidth}x${record.cropHeight}), " +
-                    "OCR Input: ${record.ocrInputWidth}x${record.ocrInputHeight} (scale=${record.ocrUpscaleFactor}), " +
-                    "Scale: (${record.scaleX}, ${record.scaleY}), Density: ${record.densityDpi}, " +
-                    "OCR Blocks: ${record.ocrBlockCount}, Lines: ${record.ocrLineCount}, Elements: ${record.ocrElementCount}, " +
-                    "OCR TextLen: ${record.ocrTextLength}, Sentences: ${record.ocrSentenceCount}, " +
-                    "OCR Bounds In Crop: ${record.firstSentenceCropBounds}, " +
-                    "Highlight Bounds: ${record.firstHighlightBounds}, " +
-                    "Result: ${record.acquisitionResultType}, " +
-                    "Error: ${record.errorReason ?: "None"}"
-            )
-        } catch (_: Throwable) {
-            // Safe ignore in unit test environments where Log is not mocked
+        if (com.readme.app.BuildConfig.DEBUG) {
+            try {
+                Log.d(
+                    TAG,
+                    "Target: ${record.targetPackageName} (winId=${record.targetWindowId}, bounds=${record.windowBounds}), " +
+                        "Display: ${record.displayWidth}x${record.displayHeight}, " +
+                        "Screenshot: ${record.screenshotWidth}x${record.screenshotHeight} (originMode=${record.originMode}), " +
+                        "SelectionUI: ${record.selectionInUi} -> Norm: ${record.normalizedSelection}, " +
+                        "Crop: ${record.convertedCropRect} (${record.cropWidth}x${record.cropHeight}), " +
+                        "OCR Input: ${record.ocrInputWidth}x${record.ocrInputHeight} (scale=${record.ocrUpscaleFactor}), " +
+                        "Scale: (${record.scaleX}, ${record.scaleY}), Density: ${record.densityDpi}, " +
+                        "OCR Blocks: ${record.ocrBlockCount}, Lines: ${record.ocrLineCount}, Elements: ${record.ocrElementCount}, " +
+                        "OCR TextLen: ${record.ocrTextLength}, Sentences: ${record.ocrSentenceCount}, " +
+                        "OCR Bounds In Crop: ${record.firstSentenceCropBounds}, " +
+                        "Highlight Bounds: ${record.firstHighlightBounds}, " +
+                        "Result: ${record.acquisitionResultType}, " +
+                        "Error: ${record.errorReason ?: "None"}"
+                )
+            } catch (_: Throwable) {
+                // Safe ignore in unit test environments where Log is not mocked
+            }
         }
     }
 
