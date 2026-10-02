@@ -331,6 +331,9 @@ class ReadMeReadingService : Service() {
                     } else {
                         Toast.makeText(this@ReadMeReadingService, "Open your novel reader to calibrate", Toast.LENGTH_SHORT).show()
                     }
+                },
+                onBubbleTap = {
+                    // Tap received: bubble expansion occurs in overlay view
                 }
             )
         } else {
@@ -448,7 +451,16 @@ class ReadMeReadingService : Service() {
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.NoTextAvailable -> "No readable text found in the selected area."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrReturnedEmpty -> "No readable text found in the selected area."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.TextSegmentationEmpty -> "No sentences could be identified in the selected text."
-                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrProviderUnavailable -> "Text recognition is currently unavailable."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.OcrProviderUnavailable -> {
+                            if (result.details.contains("download", ignoreCase = true) ||
+                                result.details.contains("optional module", ignoreCase = true) ||
+                                result.details.contains("waiting", ignoreCase = true)
+                            ) {
+                                "Downloading text recognition module. Please wait a moment and try again."
+                            } else {
+                                "Text recognition is currently unavailable."
+                            }
+                        }
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.CropOutsideScreenshot -> "Selected area is outside the active screen."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaTooSmall -> "Please select a larger area."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SelectedAreaOutsideWindow -> "Selected area is outside the active window."
@@ -459,7 +471,7 @@ class ReadMeReadingService : Service() {
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.RateLimited -> "Please wait a moment before trying again."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SecureWindow -> "That screen cannot be read."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.SensitiveContentBlocked -> "That screen contains protected content."
-                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 14+."
+                        is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 11+."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.InvalidTarget -> "No active window found to read."
                         is com.readme.app.accessibility.UnifiedCrossAppAcquisitionResult.UnknownError -> "Unable to read selected screen."
                         else -> "Unable to read text."

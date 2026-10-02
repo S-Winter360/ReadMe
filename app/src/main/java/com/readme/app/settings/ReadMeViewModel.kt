@@ -111,7 +111,7 @@ class ReadMeViewModel @JvmOverloads constructor(
     )
 
     val isScreenOcrSupported: Boolean
-        get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
 
     val isScreenOcrConsentGranted: StateFlow<Boolean> = settings
         .map { it.isScreenOcrConsentGranted }

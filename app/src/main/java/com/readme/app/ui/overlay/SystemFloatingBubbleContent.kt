@@ -1,6 +1,7 @@
 package com.readme.app.ui.overlay
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -13,7 +14,8 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -30,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -50,6 +54,7 @@ import com.readme.app.ui.components.getBubbleState
 import com.readme.app.ui.theme.DarkElevatedSurface
 import com.readme.app.ui.theme.ReadMeTheme
 import com.readme.app.ui.theme.TealAccent
+import kotlinx.coroutines.launch
 
 fun getSystemBubbleState(
     sessionState: ActiveReadingSessionState,
@@ -60,6 +65,15 @@ fun getSystemBubbleState(
         return if (canAcquireText) BubbleState.Idle else BubbleState.Hidden
     }
     return getBubbleState(sessionState, activeDocumentState)
+}
+
+enum class BubbleTouchGestureState {
+    Idle,
+    Pressed,
+    Dragging,
+    Released,
+    Tapped,
+    Cancelled
 }
 
 @Composable
@@ -77,6 +91,7 @@ fun SystemFloatingBubbleContent(
     onCloseBubble: () -> Unit = {},
     onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {},
     onCalibrateNextPage: () -> Unit = {},
+    onBubbleTap: () -> Unit = {},
     onDragStart: () -> Unit = {},
     onDrag: (dx: Float, dy: Float) -> Unit = { _, _ -> },
     onDragEnd: () -> Unit = {},
@@ -84,6 +99,8 @@ fun SystemFloatingBubbleContent(
 ) {
     ReadMeTheme(darkTheme = true) {
         var isExpanded by remember { mutableStateOf(false) }
+        val coroutineScope = rememberCoroutineScope()
+        val tapFeedbackScale = remember { Animatable(1f) }
 
         val isReading = sessionState.isReading
         val isPaused = !isReading &&
@@ -103,6 +120,7 @@ fun SystemFloatingBubbleContent(
         )
 
         val bubbleScale = if (isReading) readingPulseScale else 1f
+        val effectiveScale = bubbleScale * tapFeedbackScale.value
 
         val mainIconText = when {
             isReading -> "≈"
@@ -116,52 +134,118 @@ fun SystemFloatingBubbleContent(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(10.dp)
         ) {
-            // Main floating bubble trigger
+            // Main floating bubble trigger: Single authoritative gesture handler (tap vs drag)
             Box(
                 modifier = Modifier
                     .size(60.dp)
-                    .scale(bubbleScale)
+                    .scale(effectiveScale)
                     .shadow(10.dp, CircleShape)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primaryContainer)
                     .pointerInput(Unit) {
-                        var isDragging = false
-                        var accumulatedDragX = 0f
-                        var accumulatedDragY = 0f
-                        detectDragGestures(
-                            onDragStart = {
-                                isDragging = false
-                                accumulatedDragX = 0f
-                                accumulatedDragY = 0f
-                            },
-                            onDragEnd = {
-                                if (isDragging) {
-                                    onDragEnd()
-                                } else {
-                                    // Tap recognized without dragging: expand/collapse controls
-                                    isExpanded = !isExpanded
-                                }
-                                isDragging = false
-                            },
-                            onDragCancel = {
-                                if (isDragging) {
-                                    onDragCancel()
-                                }
-                                isDragging = false
-                            },
-                            onDrag = { change, dragAmount ->
-                                accumulatedDragX += Math.abs(dragAmount.x)
-                                accumulatedDragY += Math.abs(dragAmount.y)
-                                if (accumulatedDragX > 8f || accumulatedDragY > 8f) {
-                                    if (!isDragging) {
-                                        isDragging = true
-                                        onDragStart()
+                        val dragThresholdPx = 8.dp.toPx()
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val activePointerId = down.id
+                            val startPosition = down.position
+                            var isDragging = false
+                            var gestureState = BubbleTouchGestureState.Pressed
+
+                            BubbleTouchTrace.recordDown(
+                                pointerId = activePointerId.value,
+                                startX = startPosition.x,
+                                startY = startPosition.y,
+                                threshold = dragThresholdPx,
+                                expanded = isExpanded
+                            )
+
+                            while (gestureState == BubbleTouchGestureState.Pressed || gestureState == BubbleTouchGestureState.Dragging) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == activePointerId }
+
+                                if (change == null) {
+                                    val allReleased = event.changes.all { !it.pressed }
+                                    gestureState = if (allReleased) {
+                                        if (isDragging) BubbleTouchGestureState.Released else BubbleTouchGestureState.Tapped
+                                    } else {
+                                        BubbleTouchGestureState.Cancelled
                                     }
+                                    break
+                                }
+
+                                if (!change.pressed) {
+                                    // Pointer lifted (ACTION_UP)
                                     change.consume()
-                                    onDrag(dragAmount.x, dragAmount.y)
+                                    gestureState = if (isDragging) {
+                                        BubbleTouchGestureState.Released
+                                    } else {
+                                        BubbleTouchGestureState.Tapped
+                                    }
+                                    break
+                                }
+
+                                // Pointer moving (ACTION_MOVE)
+                                val currentPos = change.position
+                                val dx = currentPos.x - startPosition.x
+                                val dy = currentPos.y - startPosition.y
+                                val displacement = Math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+
+                                BubbleTouchTrace.recordMove(
+                                    currentX = currentPos.x,
+                                    currentY = currentPos.y,
+                                    displacement = displacement,
+                                    dragging = isDragging
+                                )
+
+                                if (!isDragging) {
+                                    if (displacement > dragThresholdPx) {
+                                        isDragging = true
+                                        gestureState = BubbleTouchGestureState.Dragging
+                                        change.consume()
+                                        BubbleTouchTrace.recordDragStart()
+                                        onDragStart()
+                                        onDrag(dx, dy)
+                                    }
+                                } else {
+                                    val delta = change.positionChange()
+                                    change.consume()
+                                    if (delta.x != 0f || delta.y != 0f) {
+                                        onDrag(delta.x, delta.y)
+                                    }
                                 }
                             }
-                        )
+
+                            when (gestureState) {
+                                BubbleTouchGestureState.Tapped -> {
+                                    val before = isExpanded
+                                    val after = !before
+                                    BubbleTouchTrace.recordTap(isExpandedBefore = before, isExpandedAfter = after)
+                                    coroutineScope.launch {
+                                        try {
+                                            tapFeedbackScale.animateTo(0.92f, tween(50))
+                                            tapFeedbackScale.animateTo(1.0f, tween(100))
+                                        } catch (_: Exception) {}
+                                    }
+                                    isExpanded = after
+                                    onBubbleTap()
+                                }
+                                BubbleTouchGestureState.Released -> {
+                                    BubbleTouchTrace.recordRelease()
+                                    onDragEnd()
+                                }
+                                BubbleTouchGestureState.Cancelled -> {
+                                    BubbleTouchTrace.recordCancel(wasDragging = isDragging)
+                                    if (isDragging) {
+                                        onDragCancel()
+                                    }
+                                }
+                                else -> {
+                                    if (isDragging) {
+                                        onDragCancel()
+                                    }
+                                }
+                            }
+                        }
                     }
                     .semantics {
                         this.contentDescription = "ReadMe floating bubble"
@@ -316,6 +400,18 @@ fun SystemFloatingBubbleContent(
                                 )
                             }
                         }
+
+                        // Collapse Control (collapses expanded controls without closing the bubble)
+                        BubbleActionButton(
+                            icon = "‹",
+                            label = "Collapse controls",
+                            testTag = "bubble_collapse_button",
+                            iconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            backgroundColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            onClick = {
+                                isExpanded = false
+                            }
+                        )
 
                         // Close Bubble Button (distinct from Stop; neutral dismiss icon)
                         BubbleActionButton(

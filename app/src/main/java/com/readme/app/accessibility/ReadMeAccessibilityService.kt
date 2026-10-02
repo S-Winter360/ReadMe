@@ -8,11 +8,14 @@ import android.graphics.Path
 import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
+import com.readme.app.BuildConfig
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
@@ -39,7 +42,7 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         private set
 
     override val isSupported: Boolean
-        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
     override val canDispatchGestures: Boolean
         get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
@@ -264,10 +267,6 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
     }
 
     override suspend fun captureWindow(target: CrossAppWindowTarget): ScreenshotCaptureResult {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return ScreenshotCaptureResult.ApiNotSupported
-        }
-
         if (target.packageName == packageName) {
             return ScreenshotCaptureResult.ReadMeSelfIgnored
         }
@@ -284,101 +283,169 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
             )
         }
 
-        return captureWindowApi34(target)
+        // 1. Try window-level capture on API 34+ if windowId is valid
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && target.windowId > 0) {
+            val windowResult = captureWindowApi34(target)
+            if (windowResult is ScreenshotCaptureResult.Success) {
+                return windowResult
+            }
+            // For security-related blocks or app switches, do not attempt fallback
+            if (windowResult is ScreenshotCaptureResult.SecureWindow ||
+                windowResult is ScreenshotCaptureResult.SensitiveContentBlocked ||
+                windowResult is ScreenshotCaptureResult.StaleAppSwitch ||
+                windowResult is ScreenshotCaptureResult.ReadMeSelfIgnored) {
+                return windowResult
+            }
+            if (BuildConfig.DEBUG) {
+                Log.w(TAG, "Window screenshot failed ($windowResult), falling back to display capture")
+            }
+        }
+
+        // 2. Fallback or primary on API 30+: Display screenshot
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return captureDisplayApi30(target.displayId, target)
+        }
+
+        return ScreenshotCaptureResult.ApiNotSupported
     }
 
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
-    private suspend fun captureWindowApi34(target: CrossAppWindowTarget): ScreenshotCaptureResult =
-        suspendCancellableCoroutine { continuation ->
-            val executor = ContextCompat.getMainExecutor(this)
-            try {
-                takeScreenshotOfWindow(
-                    target.windowId,
-                    executor,
-                    object : TakeScreenshotCallback {
-                        override fun onSuccess(screenshotResult: ScreenshotResult) {
-                            val postPkg = currentActivePackage
-                            if (postPkg != null && postPkg != target.packageName && postPkg != packageName) {
-                                try {
-                                    screenshotResult.hardwareBuffer.close()
-                                } catch (_: Throwable) {}
-                                if (continuation.isActive) {
-                                    continuation.resume(
-                                        ScreenshotCaptureResult.StaleAppSwitch(
-                                            expectedPackage = target.packageName,
-                                            actualPackage = postPkg
-                                        )
-                                    )
-                                }
-                                return
-                            }
-
-                            var softwareBitmap: Bitmap? = null
-                            val hardwareBuffer = screenshotResult.hardwareBuffer
-                            val colorSpace = screenshotResult.colorSpace
-                            try {
-                                val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
-                                if (hwBitmap != null) {
-                                    softwareBitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
-                                    hwBitmap.recycle()
-                                    softwareBitmap?.density = resources.displayMetrics.densityDpi
-                                }
-                            } catch (e: Throwable) {
-                                softwareBitmap?.recycle()
-                                softwareBitmap = null
-                            } finally {
-                                try {
-                                    hardwareBuffer.close()
-                                } catch (_: Throwable) {}
-                            }
-
-                            if (softwareBitmap == null) {
-                                if (continuation.isActive) {
-                                    continuation.resume(
-                                        ScreenshotCaptureResult.Error("Failed to convert window buffer to bitmap")
-                                    )
-                                }
-                                return
-                            }
-
-                            if (continuation.isActive) {
-                                continuation.resume(
-                                    ScreenshotCaptureResult.Success(
-                                        CrossAppImageSnapshot(
-                                            packageName = target.packageName,
-                                            windowId = target.windowId,
-                                            requestId = target.requestId,
-                                            generation = target.generation,
-                                            bitmap = softwareBitmap
-                                        )
-                                    )
-                                )
-                            } else {
-                                softwareBitmap.recycle()
-                            }
-                        }
-
-                        override fun onFailure(errorCode: Int) {
-                            if (!continuation.isActive) return
-                            val result = when (errorCode) {
-                                ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> ScreenshotCaptureResult.SecureWindow
-                                ERROR_TAKE_SCREENSHOT_INVALID_WINDOW -> ScreenshotCaptureResult.InvalidTarget
-                                ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> ScreenshotCaptureResult.RateLimited
-                                ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> ScreenshotCaptureResult.ServiceNotConnected
-                                else -> ScreenshotCaptureResult.Error("Screenshot capture failed with code $errorCode", errorCode)
-                            }
-                            continuation.resume(result)
+    private suspend fun captureWindowApi34(target: CrossAppWindowTarget): ScreenshotCaptureResult {
+        return withTimeoutOrNull(4000L) {
+            suspendCancellableCoroutine { continuation ->
+                val executor = ContextCompat.getMainExecutor(this@ReadMeAccessibilityService)
+                var callbackRef: TakeScreenshotCallback? = null
+                val callback = object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshotResult: ScreenshotResult) {
+                        callbackRef = null
+                        if (continuation.isActive) {
+                            continuation.resume(processScreenshotResult(screenshotResult, target))
+                        } else {
+                            try { screenshotResult.hardwareBuffer.close() } catch (_: Throwable) {}
                         }
                     }
-                )
-            } catch (e: Throwable) {
-                if (continuation.isActive) {
-                    continuation.resume(
-                        ScreenshotCaptureResult.Error(e.message ?: "Window screenshot capture exception")
-                    )
+
+                    override fun onFailure(errorCode: Int) {
+                        callbackRef = null
+                        if (continuation.isActive) {
+                            continuation.resume(mapScreenshotFailure(errorCode))
+                        }
+                    }
+                }
+                callbackRef = callback
+
+                try {
+                    takeScreenshotOfWindow(target.windowId, executor, callback)
+                } catch (e: Throwable) {
+                    callbackRef = null
+                    if (continuation.isActive) {
+                        continuation.resume(
+                            ScreenshotCaptureResult.Error(e.message ?: "Window screenshot capture exception")
+                        )
+                    }
                 }
             }
+        } ?: ScreenshotCaptureResult.Error("Window screenshot capture timed out")
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private suspend fun captureDisplayApi30(displayId: Int, target: CrossAppWindowTarget): ScreenshotCaptureResult {
+        return withTimeoutOrNull(4000L) {
+            suspendCancellableCoroutine { continuation ->
+                val executor = ContextCompat.getMainExecutor(this@ReadMeAccessibilityService)
+                var callbackRef: TakeScreenshotCallback? = null
+                val callback = object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshotResult: ScreenshotResult) {
+                        callbackRef = null
+                        if (continuation.isActive) {
+                            continuation.resume(processScreenshotResult(screenshotResult, target))
+                        } else {
+                            try { screenshotResult.hardwareBuffer.close() } catch (_: Throwable) {}
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        callbackRef = null
+                        if (continuation.isActive) {
+                            continuation.resume(mapScreenshotFailure(errorCode))
+                        }
+                    }
+                }
+                callbackRef = callback
+
+                try {
+                    val targetDisplayId = if (displayId >= 0) displayId else android.view.Display.DEFAULT_DISPLAY
+                    takeScreenshot(targetDisplayId, executor, callback)
+                } catch (e: Throwable) {
+                    callbackRef = null
+                    if (continuation.isActive) {
+                        continuation.resume(
+                            ScreenshotCaptureResult.Error(e.message ?: "Display screenshot capture exception")
+                        )
+                    }
+                }
+            }
+        } ?: ScreenshotCaptureResult.Error("Display screenshot capture timed out")
+    }
+
+    private fun processScreenshotResult(
+        screenshotResult: ScreenshotResult,
+        target: CrossAppWindowTarget
+    ): ScreenshotCaptureResult {
+        val postPkg = currentActivePackage
+        if (postPkg != null && postPkg != target.packageName && postPkg != packageName) {
+            try {
+                screenshotResult.hardwareBuffer.close()
+            } catch (_: Throwable) {}
+            return ScreenshotCaptureResult.StaleAppSwitch(
+                expectedPackage = target.packageName,
+                actualPackage = postPkg
+            )
         }
+
+        var softwareBitmap: Bitmap? = null
+        val hardwareBuffer = screenshotResult.hardwareBuffer
+        val colorSpace = screenshotResult.colorSpace
+        try {
+            val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
+            if (hwBitmap != null) {
+                softwareBitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                hwBitmap.recycle()
+                softwareBitmap?.density = resources.displayMetrics.densityDpi
+            }
+        } catch (e: Throwable) {
+            softwareBitmap?.recycle()
+            softwareBitmap = null
+        } finally {
+            try {
+                hardwareBuffer.close()
+            } catch (_: Throwable) {}
+        }
+
+        if (softwareBitmap == null) {
+            return ScreenshotCaptureResult.Error("Failed to convert window buffer to bitmap")
+        }
+
+        return ScreenshotCaptureResult.Success(
+            CrossAppImageSnapshot(
+                packageName = target.packageName,
+                windowId = target.windowId,
+                requestId = target.requestId,
+                generation = target.generation,
+                bitmap = softwareBitmap
+            )
+        )
+    }
+
+    private fun mapScreenshotFailure(errorCode: Int): ScreenshotCaptureResult {
+        return when (errorCode) {
+            ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> ScreenshotCaptureResult.SecureWindow
+            ERROR_TAKE_SCREENSHOT_INVALID_WINDOW -> ScreenshotCaptureResult.InvalidTarget
+            ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT -> ScreenshotCaptureResult.RateLimited
+            ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS -> ScreenshotCaptureResult.ServiceNotConnected
+            else -> ScreenshotCaptureResult.Error("Screenshot capture failed with code $errorCode", errorCode)
+        }
+    }
 
     private fun detectSensitiveFields(root: AccessibilityNodeInfo): Boolean {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -405,6 +472,8 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
     }
 
     companion object {
+        private const val TAG = "ReadMeAccessibility"
+
         @Volatile
         var instance: ReadMeAccessibilityService? = null
             internal set

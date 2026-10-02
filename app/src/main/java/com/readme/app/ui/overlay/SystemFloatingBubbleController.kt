@@ -51,7 +51,8 @@ class SystemFloatingBubbleController(private val context: Context) {
         onStopReading: () -> Unit = {},
         onCloseBubble: () -> Unit = {},
         onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {},
-        onCalibrateNextPage: () -> Unit = {}
+        onCalibrateNextPage: () -> Unit = {},
+        onBubbleTap: () -> Unit = {}
     ) {
         val hasOverlay = Settings.canDrawOverlays(context)
         ReadMeCrashLogger.overlayPermissionGranted = hasOverlay
@@ -66,7 +67,37 @@ class SystemFloatingBubbleController(private val context: Context) {
         }
 
         if (bubbleView == null) {
-            bubbleView = SystemFloatingBubbleView(context)
+            bubbleView = SystemFloatingBubbleView(context).apply {
+                addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+                    val newWidth = right - left
+                    val newHeight = bottom - top
+                    val oldWidth = oldRight - oldLeft
+                    val oldHeight = oldBottom - oldTop
+                    if ((newWidth != oldWidth || newHeight != oldHeight) && isAdded) {
+                        val lp = layoutParams as? WindowManager.LayoutParams
+                        val currentWm = windowManager
+                        if (lp != null && currentWm != null) {
+                            val dm = DisplayMetrics()
+                            currentWm.defaultDisplay?.getMetrics(dm)
+                            val (clampedX, clampedY) = clampPosition(
+                                lp.x,
+                                lp.y,
+                                newWidth,
+                                newHeight,
+                                dm.widthPixels,
+                                dm.heightPixels
+                            )
+                            if (lp.x != clampedX || lp.y != clampedY) {
+                                lp.x = clampedX
+                                lp.y = clampedY
+                                try {
+                                    currentWm.updateViewLayout(this, lp)
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         val view = bubbleView ?: return
@@ -85,6 +116,7 @@ class SystemFloatingBubbleController(private val context: Context) {
             onCloseBubble = onCloseBubble,
             onAcquireMode = onAcquireMode,
             onCalibrateNextPage = onCalibrateNextPage,
+            onBubbleTap = onBubbleTap,
             onDragStart = { handleDragStart() },
             onDrag = { dx, dy -> handleDrag(view, dx, dy) },
             onDragEnd = { handleDragEnd(view, onCloseBubble) },
@@ -147,13 +179,16 @@ class SystemFloatingBubbleController(private val context: Context) {
         activeDocumentState: ActiveDocumentState,
         crossAppReadingEnabled: Boolean = true,
         canAcquireText: Boolean = false,
+        isAutoAdvanceEnabled: Boolean = false,
         onToggleReading: () -> Unit = {},
         onPauseReading: () -> Unit = {},
         onResumeReading: () -> Unit = {},
         onReselectArea: () -> Unit = {},
         onStopReading: () -> Unit = {},
         onCloseBubble: () -> Unit = {},
-        onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {}
+        onAcquireMode: (CrossAppAcquisitionMode) -> Unit = {},
+        onCalibrateNextPage: () -> Unit = {},
+        onBubbleTap: () -> Unit = {}
     ) {
         val hasOverlay = Settings.canDrawOverlays(context)
         ReadMeCrashLogger.overlayPermissionGranted = hasOverlay
@@ -169,13 +204,16 @@ class SystemFloatingBubbleController(private val context: Context) {
                 activeDocumentState = activeDocumentState,
                 crossAppReadingEnabled = crossAppReadingEnabled,
                 canAcquireText = canAcquireText,
+                isAutoAdvanceEnabled = isAutoAdvanceEnabled,
                 onToggleReading = onToggleReading,
                 onPauseReading = onPauseReading,
                 onResumeReading = onResumeReading,
                 onReselectArea = onReselectArea,
                 onStopReading = onStopReading,
                 onCloseBubble = onCloseBubble,
-                onAcquireMode = onAcquireMode
+                onAcquireMode = onAcquireMode,
+                onCalibrateNextPage = onCalibrateNextPage,
+                onBubbleTap = onBubbleTap
             )
             return
         }
@@ -210,6 +248,7 @@ class SystemFloatingBubbleController(private val context: Context) {
             activeDocumentState = activeDocumentState,
             crossAppReadingEnabled = crossAppReadingEnabled,
             canAcquireText = canAcquireText,
+            isAutoAdvanceEnabled = isAutoAdvanceEnabled,
             onToggleReading = onToggleReading,
             onPauseReading = onPauseReading,
             onResumeReading = onResumeReading,
@@ -217,6 +256,8 @@ class SystemFloatingBubbleController(private val context: Context) {
             onStopReading = onStopReading,
             onCloseBubble = onCloseBubble,
             onAcquireMode = onAcquireMode,
+            onCalibrateNextPage = onCalibrateNextPage,
+            onBubbleTap = onBubbleTap,
             onDragStart = { handleDragStart() },
             onDrag = { dx, dy -> handleDrag(view, dx, dy) },
             onDragEnd = { handleDragEnd(view, onCloseBubble) },

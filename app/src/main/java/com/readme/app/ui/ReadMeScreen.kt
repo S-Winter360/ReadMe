@@ -725,7 +725,7 @@ fun CrossAppTextSection(
                 Button(
                     onClick = {
                         if (!viewModel.isScreenOcrSupported) {
-                            statusFeedback = "Screen reading requires Android 14+ (API 34)"
+                            statusFeedback = "Screen reading requires Android 11+ (API 30)"
                         } else if (!isScreenOcrConsentGranted) {
                             showScreenOcrDisclosureDialog = true
                         } else {
@@ -738,7 +738,17 @@ fun CrossAppTextSection(
                                     is UnifiedCrossAppAcquisitionResult.SecureWindow -> "No readable image is available from this screen"
                                     is UnifiedCrossAppAcquisitionResult.SensitiveContentBlocked -> "Screen contains sensitive or password fields"
                                     is UnifiedCrossAppAcquisitionResult.RateLimited -> "Please wait a moment before capturing again"
-                                    is UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 14+"
+                                    is UnifiedCrossAppAcquisitionResult.OcrProviderUnavailable -> {
+                                        if (result.details?.contains("download", ignoreCase = true) == true ||
+                                            result.details?.contains("optional module", ignoreCase = true) == true ||
+                                            result.details?.contains("waiting", ignoreCase = true) == true
+                                        ) {
+                                            "Downloading text recognition module. Please wait a moment and try again."
+                                        } else {
+                                            "Text recognition is currently unavailable"
+                                        }
+                                    }
+                                    is UnifiedCrossAppAcquisitionResult.ApiNotSupported -> "Screen reading requires Android 11+"
                                     is UnifiedCrossAppAcquisitionResult.ServiceUnavailable -> "Accessibility service starting..."
                                     is UnifiedCrossAppAcquisitionResult.ReadMeSelfIgnored -> "Switch to another app to read screen"
                                     is UnifiedCrossAppAcquisitionResult.InvalidTarget -> "No active foreground window found"

@@ -205,11 +205,20 @@ class OnDeviceCrossAppOcrEngine : CrossAppOcrEngine {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            val msg = e.message ?: e.javaClass.simpleName
+            val isDownloading = msg.contains("download", ignoreCase = true) ||
+                    msg.contains("optional module", ignoreCase = true) ||
+                    msg.contains("Waiting for the text", ignoreCase = true)
+            val friendlyMsg = if (isDownloading) {
+                "Waiting for the text recognition module to be downloaded. Please wait a moment."
+            } else {
+                msg
+            }
             CrossAppOcrResult(
                 text = "",
                 hasText = false,
                 confidenceOrNull = null,
-                errorMessage = e.message ?: e.javaClass.simpleName
+                errorMessage = friendlyMsg
             )
         }
     }
