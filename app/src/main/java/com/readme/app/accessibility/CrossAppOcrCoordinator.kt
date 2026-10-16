@@ -69,7 +69,7 @@ object CrossAppOcrCoordinator {
             return@withContext CrossAppOcrAcquisitionResult.InvalidTarget
         }
 
-        if (target.packageName == "com.readme.app") {
+        if (CrossAppTextExtractor.isSelfPackage(target.packageName)) {
             return@withContext CrossAppOcrAcquisitionResult.ReadMeSelfIgnored
         }
 

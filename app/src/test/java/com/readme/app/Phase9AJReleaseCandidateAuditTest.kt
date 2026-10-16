@@ -58,7 +58,7 @@ class Phase9AJReleaseCandidateAuditTest {
     // =========================================================================
     @Test
     fun testMetadata_versioningAndIdentityBaseline() {
-        assertEquals("com.readme.app", BuildConfig.APPLICATION_ID)
+        assertEquals("com.summer.readme", BuildConfig.APPLICATION_ID)
         assertEquals("1.0", BuildConfig.VERSION_NAME)
         assertEquals(1, BuildConfig.VERSION_CODE)
     }

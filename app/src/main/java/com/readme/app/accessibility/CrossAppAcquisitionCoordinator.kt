@@ -37,7 +37,7 @@ object CrossAppAcquisitionCoordinator {
 
         val snapshot = acquirer.acquireCurrentText() ?: return AcquisitionResult.NoTextAvailable
 
-        if (snapshot.sourcePackageName == CrossAppTextExtractor.README_PACKAGE) {
+        if (CrossAppTextExtractor.isSelfPackage(snapshot.sourcePackageName)) {
             return AcquisitionResult.ReadMeSelfIgnored
         }
 

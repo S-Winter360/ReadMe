@@ -10,7 +10,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.readme.app"
+        applicationId = "com.summer.readme"
         minSdk = 28
         targetSdk = 37
         versionCode = 1

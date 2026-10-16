@@ -17,7 +17,14 @@ object CrossAppTextExtractor {
     const val DEFAULT_MAX_NODES = 500
     const val DEFAULT_MAX_BLOCKS = 200
     const val DEFAULT_MAX_TEXT_LENGTH = 100_000
-    const val README_PACKAGE = "com.readme.app"
+    const val README_PACKAGE = "com.summer.readme"
+    const val LEGACY_README_PACKAGE = "com.readme.app"
+
+    fun isSelfPackage(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return true
+        val trimmed = packageName.trim()
+        return trimmed == README_PACKAGE || trimmed == LEGACY_README_PACKAGE || trimmed == com.readme.app.BuildConfig.APPLICATION_ID
+    }
 
     fun extract(
         root: AccessibleNode?,
@@ -32,7 +39,7 @@ object CrossAppTextExtractor {
         if (root == null) return null
 
         val pkgName = (sourcePackageName ?: root.packageName?.toString() ?: "").trim()
-        if (pkgName.isBlank() || pkgName == README_PACKAGE) {
+        if (pkgName.isBlank() || isSelfPackage(pkgName)) {
             return null
         }
 
@@ -59,7 +66,7 @@ object CrossAppTextExtractor {
 
             // Skip ReadMe self nodes
             val nodePkg = node.packageName?.toString()
-            if (nodePkg != null && nodePkg == README_PACKAGE) return
+            if (nodePkg != null && isSelfPackage(nodePkg)) return
 
             val directText = extractDirectText(node)
 
