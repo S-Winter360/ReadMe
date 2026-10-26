@@ -126,6 +126,7 @@ class ReadingEngine(
 
         // Attempt to resolve position against current document
         val resolvedSegment = currentDocument.resolvePosition(pos)
+            ?: (if (pos.segmentIndex in segments.indices) segments[pos.segmentIndex] else null)
         if (resolvedSegment == null) {
             return startFromBeginning()
         }
@@ -216,17 +217,25 @@ class ReadingEngine(
     fun setPosition(position: ReadingPosition) {
         if (position.documentId != currentDocument.id || currentDocument.id.isEmpty()) return
 
-        val resolvedSegment = currentDocument.resolvePosition(position) ?: return
         val segments = getSegments()
+        if (segments.isEmpty()) return
+
+        val resolvedSegment = currentDocument.resolvePosition(position)
+            ?: (if (position.segmentIndex in segments.indices) segments[position.segmentIndex] else null)
+            ?: return
+
         val index = if (position.segmentIndex in segments.indices && segments[position.segmentIndex].id == resolvedSegment.id) {
             position.segmentIndex
         } else {
-            segments.indexOfFirst { it.id == resolvedSegment.id }
+            val foundIdx = segments.indexOfFirst { it.id == resolvedSegment.id }
+            if (foundIdx >= 0) foundIdx else position.segmentIndex.coerceIn(0, segments.lastIndex)
         }
         
-        if (index >= 0) {
+        if (index >= 0 && index < segments.size) {
             _currentSegmentIndex.value = index
-            _currentPosition.value = position
+            _currentSegment.value = segments[index]
+            val safePos = currentDocument.positionForIndex(index) ?: position
+            _currentPosition.value = safePos
             if (_readingState.value == ReadingSessionState.Completed) {
                 _readingState.value = ReadingSessionState.Stopped
             }

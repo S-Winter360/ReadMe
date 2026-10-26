@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         ReadMeCrashLogger.currentLifecycleState = "ActivityPaused"
+        sessionRuntime.saveCurrentProgress(isCompleted = false)
         if (!sessionRuntime.isDocumentPickerActive.value) {
             sessionRuntime.setAppForeground(false)
         }
@@ -54,6 +55,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         ReadMeCrashLogger.currentLifecycleState = "ActivityStopped"
+        sessionRuntime.saveCurrentProgress(isCompleted = false)
         if (!sessionRuntime.isDocumentPickerActive.value) {
             sessionRuntime.setAppForeground(false)
             ReadMeReadingService.syncService(applicationContext)

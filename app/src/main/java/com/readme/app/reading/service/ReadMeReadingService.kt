@@ -562,6 +562,7 @@ class ReadMeReadingService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        sessionRuntime.saveCurrentProgress(isCompleted = false)
         ReadMeCrashLogger.currentLifecycleState = "ServiceDestroyed"
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "ReadMeReadingService onDestroy (ID: $serviceInstanceId)")

@@ -1,6 +1,7 @@
 package com.readme.app.reading.progress
 
 import com.readme.app.reading.ReadingDocument
+import com.readme.app.reading.ReadingPosition
 
 /**
  * Validates persisted [ReadingProgress] against an in-memory [ReadingDocument]
@@ -35,5 +36,44 @@ object ReadingProgressValidator {
         }
 
         return true
+    }
+
+    /**
+     * Resolves a safe, range-clamped [ReadingPosition] for [progress] against [document].
+     * Clamps the segmentIndex to [0, allSegments.size - 1] and resolves valid document position.
+     */
+    fun clampAndResolvePosition(progress: ReadingProgress?, document: ReadingDocument?): ReadingPosition? {
+        if (progress == null || document == null) return null
+        if (progress.documentId.isBlank() || document.id.isBlank()) return null
+        if (progress.documentId != document.id) return null
+
+        val allSegments = document.allSegments()
+        if (allSegments.isEmpty()) return null
+
+        // If strictly valid, use exact position
+        if (validate(progress, document)) {
+            val clampedIndex = progress.segmentIndex.coerceIn(0, allSegments.lastIndex)
+            return document.positionForIndex(clampedIndex) ?: progress.toReadingPosition()
+        }
+
+        // Section or segment must belong to the document to allow safe clamping
+        val section = document.sections.firstOrNull { it.id == progress.sectionId }
+        val segment = section?.segments?.firstOrNull { it.id == progress.segmentId }
+            ?: allSegments.firstOrNull { it.id == progress.segmentId }
+
+        if (segment != null) {
+            val segmentIdx = allSegments.indexOfFirst { it.id == segment.id }
+            if (segmentIdx >= 0) {
+                return document.positionForIndex(segmentIdx)
+            }
+        }
+
+        // If section exists, clamp within that section
+        if (section != null && section.segments.isNotEmpty()) {
+            val clampedIndex = progress.segmentIndex.coerceIn(0, allSegments.lastIndex)
+            return document.positionForIndex(clampedIndex)
+        }
+
+        return null
     }
 }

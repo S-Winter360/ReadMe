@@ -37,7 +37,7 @@ object TxtDocumentParser {
     /**
      * Parses [rawText] with a given [title] into a [ReadingDocument].
      */
-    fun parse(title: String, rawText: String, documentId: String = "txt_doc_${System.currentTimeMillis()}"): ReadingDocument {
+    fun parse(title: String, rawText: String, documentId: String = "txt_doc_${(title.trim() + "_" + rawText.hashCode()).hashCode().toUInt()}"): ReadingDocument {
         val cleanTitle = title.trim().ifBlank { "Untitled Document" }
         val metadata = ReadingDocumentMetadata(
             title = cleanTitle,

@@ -472,6 +472,7 @@ class ReadMeReadingSessionRuntime(
 
     /**
      * Restores saved progress for [documentId] if valid for the loaded document.
+     * Safely clamps out-of-range positions to valid document bounds.
      */
     suspend fun restoreProgressIfAvailable(documentId: String) {
         val doc = readingEngine.currentDocument
@@ -481,16 +482,49 @@ class ReadMeReadingSessionRuntime(
         }
 
         val progress = progressRepository.loadProgress(documentId)
-        if (progress != null && ReadingProgressValidator.validate(progress, doc)) {
+        val safePosition = if (progress != null && ReadingProgressValidator.validate(progress, doc)) {
+            progress.toReadingPosition()
+        } else if (progress != null) {
+            ReadingProgressValidator.clampAndResolvePosition(progress, doc)
+        } else null
+
+        if (progress != null && safePosition != null) {
             if (progress.isCompleted) {
                 _savedProgressState.value = SavedProgressState.Completed(progress)
             } else {
-                val position = progress.toReadingPosition()
-                sessionCoordinator.setPosition(position)
+                sessionCoordinator.setPosition(safePosition)
                 _savedProgressState.value = SavedProgressState.Resumable(progress)
             }
         } else {
             _savedProgressState.value = SavedProgressState.None
+        }
+    }
+
+    /**
+     * Persists the current reading position synchronously/immediately.
+     */
+    suspend fun saveCurrentProgressSync(isCompleted: Boolean = false) {
+        val position = readingEngine.currentPosition.value ?: return
+        val doc = readingEngine.currentDocument
+        if (doc.id.isBlank() || position.documentId != doc.id || doc.id.startsWith("crossapp_") || isEphemeralActive) return
+
+        val progress = ReadingProgress.fromPosition(
+            position = position,
+            sourceType = doc.metadata.sourceType,
+            isCompleted = isCompleted,
+            lastUpdated = System.currentTimeMillis()
+        )
+
+        if (!isCompleted) {
+            _savedProgressState.value = SavedProgressState.Resumable(progress)
+        } else {
+            _savedProgressState.value = SavedProgressState.Completed(progress)
+        }
+
+        try {
+            progressRepository.saveProgress(progress)
+        } catch (e: Exception) {
+            Log.e("ReadMeSessionRuntime", "Failed to save reading progress", e)
         }
     }
 
@@ -509,14 +543,16 @@ class ReadMeReadingSessionRuntime(
             lastUpdated = System.currentTimeMillis()
         )
 
+        // Optimistically update saved progress state so UI reflects resumable immediately
+        if (!isCompleted) {
+            _savedProgressState.value = SavedProgressState.Resumable(progress)
+        } else {
+            _savedProgressState.value = SavedProgressState.Completed(progress)
+        }
+
         runtimeScope.launch(ioDispatcher) {
             try {
                 progressRepository.saveProgress(progress)
-                if (!isCompleted) {
-                    _savedProgressState.value = SavedProgressState.Resumable(progress)
-                } else {
-                    _savedProgressState.value = SavedProgressState.Completed(progress)
-                }
             } catch (e: Exception) {
                 Log.e("ReadMeSessionRuntime", "Failed to save reading progress", e)
             }
