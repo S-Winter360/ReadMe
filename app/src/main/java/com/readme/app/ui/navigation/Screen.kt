@@ -4,5 +4,6 @@ enum class Screen {
     Home,
     Settings,
     HowToUse,
-    About
+    About,
+    Account
 }

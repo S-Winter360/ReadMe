@@ -40,6 +40,13 @@ interface SpeechEngineListener {
     fun onSegmentError(segmentId: String, sessionId: Long, errorCode: Int)
 }
 
+data class VoiceAuditRecord(
+    val requestedVoiceId: String,
+    val resolvedVoiceId: String?,
+    val appliedVoiceId: String?,
+    val isSuccess: Boolean
+)
+
 open class ReadMeSpeechEngine(context: Context? = null) {
 
     private val lock = Any()
@@ -54,6 +61,13 @@ open class ReadMeSpeechEngine(context: Context? = null) {
     private var speechListener: SpeechEngineListener? = null
     val speechListenerForTesting: SpeechEngineListener? get() = speechListener
 
+    var lastVoiceAudit: VoiceAuditRecord? = null
+        private set
+
+    fun setLastVoiceAuditForTesting(audit: VoiceAuditRecord?) {
+        lastVoiceAudit = audit
+    }
+
     private var activeSessionId: Long = 0L
     private var activeSubId: Long = 0L
     private var activeSegmentId: String = ""
@@ -67,6 +81,7 @@ open class ReadMeSpeechEngine(context: Context? = null) {
 
     companion object {
         private const val UTTERANCE_PREFIX = "readme_seg"
+        const val DEFAULT_PREVIEW_TEXT = "The quick brown fox jumps over the lazy dog. ReadMe brings your books and documents to life with clear, natural speech."
     }
 
     init {
@@ -199,7 +214,7 @@ open class ReadMeSpeechEngine(context: Context? = null) {
      */
     open fun previewVoice(
         voiceId: String,
-        sampleText: String = "Welcome to ReadMe. This is a preview of the selected voice."
+        sampleText: String = DEFAULT_PREVIEW_TEXT
     ) {
         val ttsInstance = tts ?: return
         if (_state.value != TtsState.Ready && _state.value != TtsState.Stopped) return
@@ -330,17 +345,43 @@ open class ReadMeSpeechEngine(context: Context? = null) {
                     ?: rawVoices?.firstOrNull()
             }
 
+            var appliedVoiceId: String? = null
+            var voiceApplySuccess = false
+
             if (selectedVoice != null) {
-                try {
-                    ttsInstance.voice = selectedVoice
-                    ttsInstance.language = selectedVoice.locale
+                val setResult = try {
+                    ttsInstance.setVoice(selectedVoice)
                 } catch (e: Exception) {
-                    android.util.Log.w("ReadMeSpeechEngine", "Could not apply selected voice: ${e.message}")
+                    android.util.Log.w("ReadMeSpeechEngine", "Exception in setVoice: ${e.message}")
+                    TextToSpeech.ERROR
+                }
+
+                if (setResult == TextToSpeech.SUCCESS) {
+                    appliedVoiceId = selectedVoice.name
+                    voiceApplySuccess = true
+                } else {
+                    // Fallback to language ONLY if setVoice was rejected
                     try {
-                        ttsInstance.language = selectedVoice.locale
+                        val langResult = ttsInstance.setLanguage(selectedVoice.locale)
+                        appliedVoiceId = ttsInstance.voice?.name ?: selectedVoice.locale.toLanguageTag()
+                        voiceApplySuccess = (langResult != TextToSpeech.LANG_MISSING_DATA && langResult != TextToSpeech.LANG_NOT_SUPPORTED)
                     } catch (_: Exception) {}
                 }
+            } else {
+                appliedVoiceId = ttsInstance.voice?.name
             }
+
+            // Record voice audit diagnostics
+            lastVoiceAudit = VoiceAuditRecord(
+                requestedVoiceId = activeVoiceId,
+                resolvedVoiceId = selectedVoice?.name,
+                appliedVoiceId = appliedVoiceId,
+                isSuccess = voiceApplySuccess
+            )
+            android.util.Log.i(
+                "ReadMeVoiceAudit",
+                "VoiceAudit: requested='$activeVoiceId', resolved='${selectedVoice?.name}', applied='$appliedVoiceId', success=$voiceApplySuccess"
+            )
 
             // 2. Speech Rate: speed is in 0.5f..2.0f. Android TTS normal is 1.0f.
             ttsInstance.setSpeechRate(activeSpeed.coerceIn(0.5f, 2.0f))
@@ -350,9 +391,12 @@ open class ReadMeSpeechEngine(context: Context? = null) {
             val ttsPitch = (0.5f + activePitch * 1.0f).coerceIn(0.5f, 2.0f)
             ttsInstance.setPitch(ttsPitch)
 
-            // 4. Volume: Utterance-level volume via KEY_PARAM_VOLUME in Bundle
+            // 4. Volume: Utterance-level volume via KEY_PARAM_VOLUME in Bundle and explicit voiceName parameter
             val params = Bundle().apply {
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, activeVolume.coerceIn(0.0f, 1.0f))
+                if (selectedVoice != null) {
+                    putString("voiceName", selectedVoice.name)
+                }
             }
 
             val utteranceId = "$UTTERANCE_PREFIX|$sessionId|$subId|$segmentId"

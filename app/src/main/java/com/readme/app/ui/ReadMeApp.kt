@@ -25,7 +25,8 @@ fun ReadMeApp(viewModel: ReadMeViewModel = viewModel()) {
             viewModel = viewModel,
             onNavigateToSettings = { currentScreen = Screen.Settings },
             onNavigateToHowToUse = { currentScreen = Screen.HowToUse },
-            onNavigateToAbout = { currentScreen = Screen.About }
+            onNavigateToAbout = { currentScreen = Screen.About },
+            onNavigateToAccount = { currentScreen = Screen.Account }
         )
         Screen.Settings -> SettingsScreen(
             viewModel = viewModel,
@@ -35,6 +36,9 @@ fun ReadMeApp(viewModel: ReadMeViewModel = viewModel()) {
             onNavigateBack = { currentScreen = Screen.Home }
         )
         Screen.About -> AboutReadMeScreen(
+            onNavigateBack = { currentScreen = Screen.Home }
+        )
+        Screen.Account -> AccountScreen(
             onNavigateBack = { currentScreen = Screen.Home }
         )
     }

@@ -235,11 +235,34 @@ object ReadMeVoiceCurator {
         val lowerName = name.lowercase(Locale.ROOT)
         val lowerFeatures = features.map { it.lowercase(Locale.ROOT) }
 
+        val cleanNameWithoutFemale = lowerName.replace("female", "").replace("woman", "")
+        val cleanFeaturesWithoutFemale = lowerFeatures.map { it.replace("female", "").replace("woman", "") }
+
         val hasFemaleFeature = lowerFeatures.any { it.contains("female") || it.contains("woman") }
-        val hasMaleFeature = lowerFeatures.any { it.contains("male") || it.contains("man") }
+        val hasMaleFeature = cleanFeaturesWithoutFemale.any { it.contains("male") || it.contains("man") }
 
         if (hasFemaleFeature && !hasMaleFeature) return PerceivedVoiceGender.FEMALE
         if (hasMaleFeature && !hasFemaleFeature) return PerceivedVoiceGender.MALE
+
+        val hasExplicitFemale = lowerName.contains("female") || lowerName.contains("woman")
+        val hasExplicitMale = cleanNameWithoutFemale.contains("male") || cleanNameWithoutFemale.contains("man")
+
+        if (hasExplicitFemale && !hasExplicitMale) return PerceivedVoiceGender.FEMALE
+        if (hasExplicitMale && !hasExplicitFemale) return PerceivedVoiceGender.MALE
+
+        // Check well-known Google TTS voice codes (Google Speech Services offline voices)
+        val isKnownGoogleMale = lowerName.contains("-tpd") || lowerName.contains("-iol") ||
+                lowerName.contains("-rjs") || lowerName.contains("-gkb") ||
+                lowerName.contains("-wavenet-b") || lowerName.contains("-wavenet-d") ||
+                lowerName.contains("-wavenet-i") || lowerName.contains("-wavenet-j")
+
+        val isKnownGoogleFemale = lowerName.contains("-sfg") || lowerName.contains("-iob") ||
+                lowerName.contains("-fis") || lowerName.contains("-gba") ||
+                lowerName.contains("-wavenet-a") || lowerName.contains("-wavenet-c") ||
+                lowerName.contains("-wavenet-e") || lowerName.contains("-wavenet-f")
+
+        if (isKnownGoogleMale && !isKnownGoogleFemale) return PerceivedVoiceGender.MALE
+        if (isKnownGoogleFemale && !isKnownGoogleMale) return PerceivedVoiceGender.FEMALE
 
         val isFemale = lowerName.contains("female") ||
                 lowerName.contains("#female") ||
@@ -408,7 +431,8 @@ object ReadMeVoiceCurator {
 
     fun isComingSoonVoiceId(voiceId: String): Boolean {
         val lower = voiceId.lowercase(Locale.ROOT)
-        return lower.startsWith("en-gh") || lower.startsWith("en_gh") ||
+        return lower.startsWith("readme_") || lower.startsWith("readme ") ||
+                lower.startsWith("en-gh") || lower.startsWith("en_gh") ||
                 lower.startsWith("en-ng") || lower.startsWith("en_ng") ||
                 lower.startsWith("ar-") || lower.startsWith("ar_") || lower.startsWith("ar") ||
                 lower.startsWith("fr-") || lower.startsWith("fr_") || lower.startsWith("fr") ||

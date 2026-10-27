@@ -162,18 +162,10 @@ fun ReadMeVoiceSelector(
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = {
-                Column {
-                    Text(
-                        text = "Voice Library",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Curated English library & upcoming voices",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = "Voice Library",
+                    style = MaterialTheme.typography.titleLarge
+                )
             },
             text = {
                 Box(
@@ -189,25 +181,9 @@ fun ReadMeVoiceSelector(
                         // =====================================================
                         // SECTION B: Premium ReadMe Voices (Coming Soon)
                         // =====================================================
-                        item(key = "header_premium_voices") {
-                            Column(modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) {
-                                Text(
-                                    text = "Premium ReadMe Voices",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "High-expressiveness, human-like neural voices",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
                         item(key = "premium_male") {
                             LockedVoiceRow(
-                                name = "ReadMe Male",
+                                name = "ReadMe Male — Coming Soon",
                                 subtitle = "Natural, expressive human-like reading",
                                 testTag = "premium_voice_male"
                             )
@@ -215,22 +191,9 @@ fun ReadMeVoiceSelector(
 
                         item(key = "premium_female") {
                             LockedVoiceRow(
-                                name = "ReadMe Female",
+                                name = "ReadMe Female — Coming Soon",
                                 subtitle = "Natural, expressive human-like reading",
                                 testTag = "premium_voice_female"
-                            )
-                        }
-
-                        item(key = "premium_explainer") {
-                            Text(
-                                text = "Coming Soon: Premium expressive human-like voices will be available in a future update.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                                    .semantics {
-                                        contentDescription = "Coming Soon: Premium expressive human-like voices will be available in a future update."
-                                    }
                             )
                         }
 
@@ -335,19 +298,13 @@ fun ReadMeVoiceSelector(
                         // =====================================================
                         item(key = "header_planned_languages") {
                             Spacer(modifier = Modifier.height(8.dp))
-                            Column(modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)) {
-                                Text(
-                                    text = "Other Languages (Coming Soon)",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "Planned for upcoming ReadMe releases",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                                )
-                            }
+                            Text(
+                                text = "Other Languages (Coming Soon)",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                            )
                         }
 
                         items(ReadMeVoiceCurator.PLANNED_COMING_SOON_LANGUAGES, key = { it.familyKey }) { lang ->

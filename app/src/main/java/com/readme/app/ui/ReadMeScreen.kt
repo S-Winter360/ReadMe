@@ -90,7 +90,8 @@ fun ReadMeScreen(
     viewModel: ReadMeViewModel,
     onNavigateToSettings: () -> Unit = {},
     onNavigateToHowToUse: () -> Unit = {},
-    onNavigateToAbout: () -> Unit = {}
+    onNavigateToAbout: () -> Unit = {},
+    onNavigateToAccount: () -> Unit = {}
 ) {
     val pdfViewerState by viewModel.pdfViewerState.collectAsStateWithLifecycle()
     val pdfViewportState by viewModel.pdfViewportState.collectAsStateWithLifecycle()
@@ -240,7 +241,26 @@ fun ReadMeScreen(
                         )
                     }
                 },
-                actions = {},
+                actions = {
+                    IconButton(
+                        onClick = onNavigateToAccount,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("home_account_button")
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_account),
+                                contentDescription = "Account & ReadMe AI",
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
