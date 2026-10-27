@@ -28,7 +28,8 @@ data class ReadMeVoice(
     val latency: Int = 300,
     val qualityDescriptor: String? = null,
     val familyKey: String = "",
-    val familyDisplayName: String = ""
+    val familyDisplayName: String = "",
+    val genderDescriptor: String? = null
 ) {
     val isOffline: Boolean get() = !isNetworkConnectionRequired
 }
@@ -92,7 +93,7 @@ open class ReadMeSpeechEngine(context: Context? = null) {
     }
 
     fun discoverVoicesWithRawVoicesForTesting(rawVoices: Collection<Voice>?) {
-        _availableVoices.value = ReadMeVoiceCurator.curateVoices(rawVoices)
+        _availableVoices.value = ReadMeVoiceCurator.curatePhase2AVoices(rawVoices)
     }
 
     open fun setSpeechListener(listener: SpeechEngineListener?) {
@@ -185,10 +186,11 @@ open class ReadMeSpeechEngine(context: Context? = null) {
         val ttsInstance = tts ?: return
         try {
             val rawVoices: Set<Voice>? = ttsInstance.voices
-            val curated = ReadMeVoiceCurator.curateVoices(rawVoices)
+            val curated = ReadMeVoiceCurator.curatePhase2AVoices(rawVoices)
             _availableVoices.value = curated
         } catch (e: Exception) {
-            _state.value = TtsState.Error
+            android.util.Log.w("ReadMeSpeechEngine", "Could not query raw voices: ${e.message}")
+            _availableVoices.value = emptyList()
         }
     }
 
@@ -201,6 +203,10 @@ open class ReadMeSpeechEngine(context: Context? = null) {
     ) {
         val ttsInstance = tts ?: return
         if (_state.value != TtsState.Ready && _state.value != TtsState.Stopped) return
+        if (voiceId.isBlank()) return
+
+        val available = _availableVoices.value
+        if (available.isNotEmpty() && available.none { it.id == voiceId }) return
 
         synchronized(lock) {
             activeVoiceId = voiceId
@@ -228,6 +234,13 @@ open class ReadMeSpeechEngine(context: Context? = null) {
         pitch: Float,
         volume: Float
     ) {
+        if (text.isBlank()) {
+            _state.value = TtsState.Ready
+            isSpeakingActive = false
+            speechListener?.onSegmentCompleted(segmentId, sessionId)
+            return
+        }
+
         val ttsInstance = tts
         if (ttsInstance == null || (_state.value != TtsState.Ready && _state.value != TtsState.Speaking && _state.value != TtsState.Stopped)) {
             return
@@ -281,20 +294,51 @@ open class ReadMeSpeechEngine(context: Context? = null) {
         subId: Long
     ) {
         val ttsInstance = tts ?: return
+
+        // Fast-path for blank text: do not block playback or invoke TTS on empty utterances
+        if (text.isBlank()) {
+            _state.value = TtsState.Ready
+            isSpeakingActive = false
+            speechListener?.onSegmentCompleted(segmentId, sessionId)
+            return
+        }
+
         try {
-            // 1. Resolve and apply Voice
-            val rawVoices = ttsInstance.voices
-            val selectedVoice = rawVoices?.find { it.name == activeVoiceId }
-            if (selectedVoice != null) {
-                ttsInstance.voice = selectedVoice
-                ttsInstance.language = selectedVoice.locale
+            // 1. Resolve and apply Voice safely
+            val rawVoices = try {
+                ttsInstance.voices
+            } catch (e: Exception) {
+                android.util.Log.w("ReadMeSpeechEngine", "Could not query voices: ${e.message}")
+                null
+            }
+
+            val curated = ReadMeVoiceCurator.curatePhase2AVoices(rawVoices)
+            val isComingSoon = ReadMeVoiceCurator.isComingSoonVoiceId(activeVoiceId)
+
+            val selectedVoice = if (!isComingSoon && rawVoices?.any { it.name == activeVoiceId } == true) {
+                rawVoices.find { it.name == activeVoiceId }
             } else {
-                val curated = ReadMeVoiceCurator.curateVoices(rawVoices)
-                val fallbackVoice = curated.firstOrNull()?.let { cur -> rawVoices?.find { it.name == cur.id } }
+                val candidateLocaleFamily = rawVoices?.find { it.name == activeVoiceId }?.let {
+                    CuratedLocaleFamily.match(it.locale, it.name)
+                }
+                val localeFallback = if (candidateLocaleFamily != null) {
+                    curated.firstOrNull { it.familyKey == candidateLocaleFamily.familyKey }
+                } else null
+
+                val fallbackCurated = localeFallback ?: curated.firstOrNull()
+                fallbackCurated?.let { cur -> rawVoices?.find { it.name == cur.id } }
                     ?: rawVoices?.firstOrNull()
-                if (fallbackVoice != null) {
-                    ttsInstance.voice = fallbackVoice
-                    ttsInstance.language = fallbackVoice.locale
+            }
+
+            if (selectedVoice != null) {
+                try {
+                    ttsInstance.voice = selectedVoice
+                    ttsInstance.language = selectedVoice.locale
+                } catch (e: Exception) {
+                    android.util.Log.w("ReadMeSpeechEngine", "Could not apply selected voice: ${e.message}")
+                    try {
+                        ttsInstance.language = selectedVoice.locale
+                    } catch (_: Exception) {}
                 }
             }
 
@@ -317,12 +361,13 @@ open class ReadMeSpeechEngine(context: Context? = null) {
             if (result == TextToSpeech.SUCCESS) {
                 _state.value = TtsState.Speaking
             } else {
-                _state.value = TtsState.Error
+                _state.value = TtsState.Ready
                 isSpeakingActive = false
                 speechListener?.onSegmentError(segmentId, sessionId, result)
             }
         } catch (e: Exception) {
-            _state.value = TtsState.Error
+            android.util.Log.e("ReadMeSpeechEngine", "Error during performSynthesis", e)
+            _state.value = TtsState.Ready
             isSpeakingActive = false
             speechListener?.onSegmentError(segmentId, sessionId, -1)
         }

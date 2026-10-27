@@ -81,29 +81,45 @@ class ReadMeSettingsRepository(private val context: Context) {
         }
 
     suspend fun updateSelectedVoice(voice: String) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.SELECTED_VOICE] = voice
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.SELECTED_VOICE] = voice
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating selected voice: $voice", e)
         }
     }
 
     suspend fun updateSpeechVolume(volume: Float) {
         val clamped = volume.coerceIn(0.0f, 1.0f)
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.SPEECH_VOLUME] = clamped
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.SPEECH_VOLUME] = clamped
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating speech volume", e)
         }
     }
 
     suspend fun updateSpeechSpeed(speed: Float) {
         val clamped = speed.coerceIn(0.5f, 2.0f)
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.SPEECH_SPEED] = clamped
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.SPEECH_SPEED] = clamped
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating speech speed", e)
         }
     }
 
     suspend fun updateSpeechPitch(pitch: Float) {
         val clamped = pitch.coerceIn(0.0f, 1.0f)
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.SPEECH_PITCH] = clamped
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.SPEECH_PITCH] = clamped
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating speech pitch", e)
         }
     }
 
@@ -112,33 +128,53 @@ class ReadMeSettingsRepository(private val context: Context) {
     }
 
     suspend fun updateFloatingReadmeEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.FLOATING_README_ENABLED] = enabled
-            preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED] = enabled
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.FLOATING_README_ENABLED] = enabled
+                preferences[PreferencesKeys.SYSTEM_BUBBLE_ENABLED] = enabled
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating floating readme enabled", e)
         }
     }
 
     suspend fun updateCrossAppReadingEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.CROSS_APP_READING_ENABLED] = enabled
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.CROSS_APP_READING_ENABLED] = enabled
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating cross app reading enabled", e)
         }
     }
 
     suspend fun updateScreenOcrConsentGranted(granted: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] = granted
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.SCREEN_OCR_CONSENT_GRANTED] = granted
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating screen ocr consent", e)
         }
     }
 
     suspend fun updateAutoAdvanceScreenReadingEnabled(enabled: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.AUTO_ADVANCE_SCREEN_READING_ENABLED] = enabled
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.AUTO_ADVANCE_SCREEN_READING_ENABLED] = enabled
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating auto advance screen reading enabled", e)
         }
     }
 
     suspend fun updatePagedReaderNavigationMode(mode: PagedReaderNavigationMode) {
-        context.dataStore.edit { preferences ->
-            preferences[PreferencesKeys.PAGED_READER_NAVIGATION_MODE] = mode.name
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.PAGED_READER_NAVIGATION_MODE] = mode.name
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating paged reader navigation mode", e)
         }
     }
 }

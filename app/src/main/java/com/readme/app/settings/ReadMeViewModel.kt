@@ -221,6 +221,9 @@ class ReadMeViewModel @JvmOverloads constructor(
     }
 
     fun updateSelectedVoice(voice: String) {
+        if (voice.isBlank() || voice.startsWith("readme_") || voice.equals("coming_soon", ignoreCase = true)) {
+            return
+        }
         viewModelScope.launch {
             repository.updateSelectedVoice(voice)
         }
@@ -228,6 +231,12 @@ class ReadMeViewModel @JvmOverloads constructor(
     }
 
     fun previewVoice(voice: String) {
+        if (voice.isBlank() || voice.startsWith("readme_") || voice.equals("coming_soon", ignoreCase = true)) {
+            return
+        }
+        if (readingEngine.readingState.value == ReadingSessionState.Reading) {
+            stopReading()
+        }
         speechEngine.previewVoice(voice)
     }
 

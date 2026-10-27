@@ -212,4 +212,219 @@ object ReadMeVoiceCurator {
             else -> "Basic quality"
         }
     }
+
+    // =========================================================================
+    // Phase 2A Curated English Voice Library & Coming Soon Features
+    // =========================================================================
+
+    val US_MALE_NAMES = listOf("Daniel", "Oliver")
+    val US_FEMALE_NAMES = listOf("Emma", "Claire")
+    val UK_MALE_NAMES = listOf("Arthur", "George")
+    val UK_FEMALE_NAMES = listOf("Charlotte", "Sophie")
+
+    val PLANNED_COMING_SOON_LANGUAGES = listOf(
+        PlannedLanguage("en-GH", "English (Ghana)"),
+        PlannedLanguage("en-NG", "English (Nigeria)"),
+        PlannedLanguage("ar", "Arabic"),
+        PlannedLanguage("fr", "French"),
+        PlannedLanguage("la", "Latin"),
+        PlannedLanguage("es", "Spanish")
+    )
+
+    fun detectPerceivedGender(name: String, features: Set<String> = emptySet()): PerceivedVoiceGender {
+        val lowerName = name.lowercase(Locale.ROOT)
+        val lowerFeatures = features.map { it.lowercase(Locale.ROOT) }
+
+        val hasFemaleFeature = lowerFeatures.any { it.contains("female") || it.contains("woman") }
+        val hasMaleFeature = lowerFeatures.any { it.contains("male") || it.contains("man") }
+
+        if (hasFemaleFeature && !hasMaleFeature) return PerceivedVoiceGender.FEMALE
+        if (hasMaleFeature && !hasFemaleFeature) return PerceivedVoiceGender.MALE
+
+        val isFemale = lowerName.contains("female") ||
+                lowerName.contains("#female") ||
+                lowerName.contains("_female") ||
+                lowerName.contains("-female") ||
+                lowerName.contains("woman") ||
+                lowerName.contains("sf-") ||
+                lowerName.contains("f0") || lowerName.contains("f1") || lowerName.contains("f2") || lowerName.contains("f3") ||
+                lowerName.contains("-f-") || lowerName.contains("_f_")
+
+        val isMale = lowerName.contains("male") ||
+                lowerName.contains("#male") ||
+                lowerName.contains("_male") ||
+                lowerName.contains("-male") ||
+                lowerName.contains("man") ||
+                lowerName.contains("sm-") ||
+                lowerName.contains("m0") || lowerName.contains("m1") || lowerName.contains("m2") || lowerName.contains("m3") ||
+                lowerName.contains("-m-") || lowerName.contains("_m_")
+
+        return when {
+            isFemale && !isMale -> PerceivedVoiceGender.FEMALE
+            isMale && !isFemale -> PerceivedVoiceGender.MALE
+            else -> PerceivedVoiceGender.UNSPECIFIED
+        }
+    }
+
+    /**
+     * Phase 2A: Curates voices specifically for the English (US) and English (UK) library,
+     * assigning up to 4 real distinct voices per locale with friendly human-style names
+     * grouped consistently by perceived gender.
+     */
+    fun curatePhase2AVoices(
+        rawVoices: Collection<Voice>?,
+        allowNetworkFallback: Boolean = false
+    ): List<ReadMeVoice> {
+        if (rawVoices.isNullOrEmpty()) return emptyList()
+
+        val metadataList = rawVoices.map { voice ->
+            VoiceMetadata(
+                name = voice.name,
+                locale = voice.locale,
+                quality = voice.quality,
+                latency = voice.latency,
+                isNetworkConnectionRequired = voice.isNetworkConnectionRequired,
+                features = voice.features ?: emptySet()
+            )
+        }
+
+        return curatePhase2AFromMetadata(metadataList, allowNetworkFallback)
+    }
+
+    /**
+     * Pure metadata version of Phase 2A curation for unit testing.
+     */
+    fun curatePhase2AFromMetadata(
+        rawMetadata: Collection<VoiceMetadata>?,
+        allowNetworkFallback: Boolean = false
+    ): List<ReadMeVoice> {
+        if (rawMetadata.isNullOrEmpty()) return emptyList()
+
+        val distinctVoices = rawMetadata.distinctBy { it.name }
+        val targetFamilies = listOf(CuratedLocaleFamily.ENGLISH_US, CuratedLocaleFamily.ENGLISH_UK)
+        val result = mutableListOf<ReadMeVoice>()
+
+        for (family in targetFamilies) {
+            val familyCandidates = distinctVoices.filter { voice ->
+                CuratedLocaleFamily.match(voice.locale, voice.name) == family
+            }
+            if (familyCandidates.isEmpty()) continue
+
+            val offlineCandidates = familyCandidates.filter { !it.isNetworkConnectionRequired }
+            val pool = if (offlineCandidates.isNotEmpty()) {
+                offlineCandidates
+            } else if (allowNetworkFallback) {
+                familyCandidates
+            } else {
+                emptyList()
+            }
+            if (pool.isEmpty()) continue
+
+            val sortedCandidates = pool.sortedWith(
+                compareByDescending<VoiceMetadata> { it.quality }
+                    .thenBy { it.latency }
+                    .thenBy { it.name }
+            )
+
+            val maleList = mutableListOf<VoiceMetadata>()
+            val femaleList = mutableListOf<VoiceMetadata>()
+            val unspecifiedList = mutableListOf<VoiceMetadata>()
+
+            for (candidate in sortedCandidates) {
+                when (detectPerceivedGender(candidate.name, candidate.features)) {
+                    PerceivedVoiceGender.MALE -> maleList.add(candidate)
+                    PerceivedVoiceGender.FEMALE -> femaleList.add(candidate)
+                    PerceivedVoiceGender.UNSPECIFIED -> unspecifiedList.add(candidate)
+                }
+            }
+
+            val selectedMale = mutableListOf<VoiceMetadata>()
+            val selectedFemale = mutableListOf<VoiceMetadata>()
+
+            // 1. Fill male pool up to 2
+            for (c in maleList) {
+                if (selectedMale.size < 2) selectedMale.add(c)
+            }
+            // 2. Fill female pool up to 2
+            for (c in femaleList) {
+                if (selectedFemale.size < 2) selectedFemale.add(c)
+            }
+            // 3. Fill remaining slots from unspecified candidates (male pool up to 2, then female pool up to 2)
+            while (selectedMale.size < 2 && unspecifiedList.isNotEmpty()) {
+                selectedMale.add(unspecifiedList.removeAt(0))
+            }
+            while (selectedFemale.size < 2 && unspecifiedList.isNotEmpty()) {
+                selectedFemale.add(unspecifiedList.removeAt(0))
+            }
+
+            val maleNames = if (family == CuratedLocaleFamily.ENGLISH_US) US_MALE_NAMES else UK_MALE_NAMES
+            val femaleNames = if (family == CuratedLocaleFamily.ENGLISH_US) US_FEMALE_NAMES else UK_FEMALE_NAMES
+
+            // Grouping: Male voices grouped together, female voices grouped together
+            selectedMale.forEachIndexed { index, candidate ->
+                val name = maleNames.getOrElse(index) { "Male Voice ${index + 1}" }
+                result.add(
+                    ReadMeVoice(
+                        id = candidate.name,
+                        displayName = name,
+                        locale = candidate.locale,
+                        isNetworkConnectionRequired = candidate.isNetworkConnectionRequired,
+                        quality = candidate.quality,
+                        latency = candidate.latency,
+                        qualityDescriptor = qualityDescriptorFromQuality(candidate.quality),
+                        familyKey = family.familyKey,
+                        familyDisplayName = family.familyDisplayName,
+                        genderDescriptor = "Male"
+                    )
+                )
+            }
+
+            selectedFemale.forEachIndexed { index, candidate ->
+                val name = femaleNames.getOrElse(index) { "Female Voice ${index + 1}" }
+                result.add(
+                    ReadMeVoice(
+                        id = candidate.name,
+                        displayName = name,
+                        locale = candidate.locale,
+                        isNetworkConnectionRequired = candidate.isNetworkConnectionRequired,
+                        quality = candidate.quality,
+                        latency = candidate.latency,
+                        qualityDescriptor = qualityDescriptorFromQuality(candidate.quality),
+                        familyKey = family.familyKey,
+                        familyDisplayName = family.familyDisplayName,
+                        genderDescriptor = "Female"
+                    )
+                )
+            }
+        }
+
+        return result
+    }
+
+    fun isComingSoonLocale(locale: Locale): Boolean {
+        val family = CuratedLocaleFamily.match(locale) ?: return false
+        return family != CuratedLocaleFamily.ENGLISH_US && family != CuratedLocaleFamily.ENGLISH_UK
+    }
+
+    fun isComingSoonVoiceId(voiceId: String): Boolean {
+        val lower = voiceId.lowercase(Locale.ROOT)
+        return lower.startsWith("en-gh") || lower.startsWith("en_gh") ||
+                lower.startsWith("en-ng") || lower.startsWith("en_ng") ||
+                lower.startsWith("ar-") || lower.startsWith("ar_") || lower.startsWith("ar") ||
+                lower.startsWith("fr-") || lower.startsWith("fr_") || lower.startsWith("fr") ||
+                lower.startsWith("la-") || lower.startsWith("la_") || lower.startsWith("la") ||
+                lower.startsWith("es-") || lower.startsWith("es_") || lower.startsWith("es")
+    }
 }
+
+enum class PerceivedVoiceGender {
+    MALE,
+    FEMALE,
+    UNSPECIFIED
+}
+
+data class PlannedLanguage(
+    val familyKey: String,
+    val familyDisplayName: String
+)
+

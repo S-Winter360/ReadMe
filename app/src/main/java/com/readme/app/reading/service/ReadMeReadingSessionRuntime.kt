@@ -164,7 +164,8 @@ class ReadMeReadingSessionRuntime(
                     if (voices.isNotEmpty()) {
                         val currentVoiceId = currentSettings.selectedVoice
                         val voiceExists = voices.any { it.id == currentVoiceId }
-                        if (!voiceExists || currentVoiceId == "natural_voice" || currentVoiceId.isBlank()) {
+                        val isComingSoon = com.readme.app.speech.ReadMeVoiceCurator.isComingSoonVoiceId(currentVoiceId)
+                        if (!isComingSoon && (!voiceExists || currentVoiceId == "natural_voice" || currentVoiceId.isBlank())) {
                             val defaultVoice = voices.first()
                             repo.updateSelectedVoice(defaultVoice.id)
                         }
