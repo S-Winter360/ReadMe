@@ -15,5 +15,7 @@ data class ReadMeSettings(
     val isCrossAppReadingEnabled: Boolean = false,
     val isScreenOcrConsentGranted: Boolean = false,
     val isAutoAdvanceScreenReadingEnabled: Boolean = false,
-    val pagedReaderNavigationMode: PagedReaderNavigationMode = PagedReaderNavigationMode.ACCESSIBILITY_ACTION
+    val pagedReaderNavigationMode: PagedReaderNavigationMode = PagedReaderNavigationMode.ACCESSIBILITY_ACTION,
+    val isOnboardingCompleted: Boolean = false,
+    val isOnboardingStarted: Boolean = false
 )

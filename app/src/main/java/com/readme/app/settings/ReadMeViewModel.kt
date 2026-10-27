@@ -59,6 +59,12 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+sealed interface OnboardingStatus {
+    data object Loading : OnboardingStatus
+    data object Required : OnboardingStatus
+    data object Completed : OnboardingStatus
+}
+
 class ReadMeViewModel @JvmOverloads constructor(
     application: Application,
     private val contentSource: ReadingContentSource? = null,
@@ -117,9 +123,24 @@ class ReadMeViewModel @JvmOverloads constructor(
         .map { it.isScreenOcrConsentGranted }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    private val _onboardingStatus = MutableStateFlow<OnboardingStatus>(OnboardingStatus.Loading)
+    val onboardingStatus: StateFlow<OnboardingStatus> = _onboardingStatus.asStateFlow()
+
     fun setScreenOcrConsentGranted(granted: Boolean) {
         viewModelScope.launch {
             repository.updateScreenOcrConsentGranted(granted)
+        }
+    }
+
+    fun startOnboarding() {
+        viewModelScope.launch {
+            repository.updateOnboardingStarted(true)
+        }
+    }
+
+    fun completeOnboarding() {
+        viewModelScope.launch {
+            repository.updateOnboardingCompleted(true)
         }
     }
 
@@ -127,6 +148,16 @@ class ReadMeViewModel @JvmOverloads constructor(
     private var documentLoadJob: Job? = null
 
     init {
+        // Collect onboarding state from repository to resolve initial screen without race conditions
+        viewModelScope.launch {
+            repository.settingsFlow.collect { currentSettings ->
+                _onboardingStatus.value = if (currentSettings.isOnboardingCompleted) {
+                    OnboardingStatus.Completed
+                } else {
+                    OnboardingStatus.Required
+                }
+            }
+        }
         // Collect reading position changes to update sync and navigation
         viewModelScope.launch {
             readingEngine.currentPosition.collect { position ->
