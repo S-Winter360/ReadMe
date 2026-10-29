@@ -104,6 +104,12 @@ class ReadMeViewModel @JvmOverloads constructor(
     val currentSegment: StateFlow<ReadingSegment?> = readingEngine.currentSegment
     val currentPosition: StateFlow<ReadingPosition?> = readingEngine.currentPosition
 
+    val backgroundManager = com.readme.app.ui.background.ReadMeBackgroundManager.getInstance(application, viewModelScope)
+    val currentBackgroundBitmap: StateFlow<androidx.compose.ui.graphics.ImageBitmap?> = backgroundManager.currentBitmap
+    val currentBackgroundImageName: StateFlow<String?> = backgroundManager.currentImageName
+    val availableBackgrounds: StateFlow<List<com.readme.app.ui.background.BackgroundImageSource>> = backgroundManager.availableSources
+    val currentBackgroundIndex: StateFlow<Int> = backgroundManager.currentIndex
+
     val settings: StateFlow<ReadMeSettings> = repository.settingsFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -144,6 +150,16 @@ class ReadMeViewModel @JvmOverloads constructor(
     private var documentLoadJob: Job? = null
 
     init {
+        // Collect background settings changes to update background manager
+        viewModelScope.launch {
+            settings.collect { s ->
+                backgroundManager.updateSettings(
+                    enabled = s.isDynamicBackgroundEnabled,
+                    intervalMin = s.backgroundShuffleIntervalMinutes
+                )
+            }
+        }
+
         // Collect reading position changes to update sync and navigation
         viewModelScope.launch {
             readingEngine.currentPosition.collect { position ->
@@ -316,6 +332,32 @@ class ReadMeViewModel @JvmOverloads constructor(
         _completedOnboardingThisSession.value = completed
         viewModelScope.launch {
             repository.updateOnboardingCompleted(completed)
+        }
+    }
+
+    fun shuffleNextBackground() = backgroundManager.shuffleNext()
+
+    fun shufflePreviousBackground() = backgroundManager.shufflePrevious()
+
+    fun refreshBackgrounds() = backgroundManager.refreshBackgroundList()
+
+    fun importBackgroundImages(
+        uris: List<Uri>,
+        contentResolver: android.content.ContentResolver,
+        onComplete: (Int) -> Unit
+    ) {
+        backgroundManager.importImages(uris, contentResolver, onComplete)
+    }
+
+    fun setDynamicBackgroundEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateDynamicBackgroundEnabled(enabled)
+        }
+    }
+
+    fun setBackgroundShuffleIntervalMinutes(minutes: Int) {
+        viewModelScope.launch {
+            repository.updateBackgroundShuffleIntervalMinutes(minutes)
         }
     }
 

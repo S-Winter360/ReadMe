@@ -34,6 +34,8 @@ class ReadMeSettingsRepository(private val context: Context) {
         val AUTO_ADVANCE_SCREEN_READING_ENABLED = booleanPreferencesKey("auto_advance_screen_reading_enabled")
         val PAGED_READER_NAVIGATION_MODE = stringPreferencesKey("paged_reader_navigation_mode")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+        val DYNAMIC_BACKGROUND_ENABLED = booleanPreferencesKey("dynamic_background_enabled")
+        val BACKGROUND_SHUFFLE_INTERVAL_MINUTES = androidx.datastore.preferences.core.intPreferencesKey("background_shuffle_interval_minutes")
     }
 
     val settingsFlow: Flow<ReadMeSettings> = context.dataStore.data
@@ -62,6 +64,8 @@ class ReadMeSettingsRepository(private val context: Context) {
                 PagedReaderNavigationMode.ACCESSIBILITY_ACTION
             }
             val isOnboardingCompleted = preferences[PreferencesKeys.ONBOARDING_COMPLETED] ?: false
+            val isDynamicBgEnabled = preferences[PreferencesKeys.DYNAMIC_BACKGROUND_ENABLED] ?: true
+            val bgIntervalMinutes = preferences[PreferencesKeys.BACKGROUND_SHUFFLE_INTERVAL_MINUTES] ?: 20
 
             // Validate/clamp numeric values
             val clampedVolume = volume.coerceIn(0.0f, 1.0f)
@@ -79,7 +83,9 @@ class ReadMeSettingsRepository(private val context: Context) {
                 isScreenOcrConsentGranted = isOcrConsentGranted,
                 isAutoAdvanceScreenReadingEnabled = isAutoAdvanceEnabled,
                 pagedReaderNavigationMode = pagedNavMode,
-                isOnboardingCompleted = isOnboardingCompleted
+                isOnboardingCompleted = isOnboardingCompleted,
+                isDynamicBackgroundEnabled = isDynamicBgEnabled,
+                backgroundShuffleIntervalMinutes = bgIntervalMinutes
             )
         }
 
@@ -188,6 +194,27 @@ class ReadMeSettingsRepository(private val context: Context) {
             }
         } catch (e: Exception) {
             android.util.Log.e("ReadMeSettingsRepo", "Error updating onboarding completed", e)
+        }
+    }
+
+    suspend fun updateDynamicBackgroundEnabled(enabled: Boolean) {
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.DYNAMIC_BACKGROUND_ENABLED] = enabled
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating dynamic background enabled", e)
+        }
+    }
+
+    suspend fun updateBackgroundShuffleIntervalMinutes(minutes: Int) {
+        val clamped = minutes.coerceIn(1, 1440)
+        try {
+            context.dataStore.edit { preferences ->
+                preferences[PreferencesKeys.BACKGROUND_SHUFFLE_INTERVAL_MINUTES] = clamped
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ReadMeSettingsRepo", "Error updating background shuffle interval", e)
         }
     }
 }

@@ -114,6 +114,9 @@ class ReadMeReadingSessionRuntime(
         _isBubbleClosedByUser.value = false
     }
 
+    private val sessionIdSequence = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
+    private fun generateNextSessionId(): Long = sessionIdSequence.incrementAndGet()
+
     private var activeSessionId: Long = 0L
     val currentSessionId: Long
         @VisibleForTesting get() = activeSessionId
@@ -286,7 +289,7 @@ class ReadMeReadingSessionRuntime(
             return null
         }
 
-        activeSessionId = System.currentTimeMillis()
+        activeSessionId = generateNextSessionId()
         val thisSessionId = activeSessionId
 
         val segmentToSpeak = sessionCoordinator.startReading()
@@ -369,7 +372,7 @@ class ReadMeReadingSessionRuntime(
                 saveCurrentProgress(isCompleted = false)
             }
             if (wasReading) {
-                activeSessionId = System.currentTimeMillis()
+                activeSessionId = generateNextSessionId()
                 val thisSessionId = activeSessionId
                 val settings = latestSettings
                 sessionCoordinator.syncSessionState(speechState = TtsState.Speaking)
@@ -410,7 +413,7 @@ class ReadMeReadingSessionRuntime(
                 saveCurrentProgress(isCompleted = false)
             }
             if (wasReading) {
-                activeSessionId = System.currentTimeMillis()
+                activeSessionId = generateNextSessionId()
                 val thisSessionId = activeSessionId
                 val settings = latestSettings
                 sessionCoordinator.syncSessionState(speechState = TtsState.Speaking)

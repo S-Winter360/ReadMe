@@ -94,6 +94,9 @@ fun ReadMeScreen(
     onNavigateToAbout: () -> Unit = {},
     onNavigateToAccount: () -> Unit = {}
 ) {
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val currentBackgroundBitmap by viewModel.currentBackgroundBitmap.collectAsStateWithLifecycle()
+    val currentBackgroundImageName by viewModel.currentBackgroundImageName.collectAsStateWithLifecycle()
     val pdfViewerState by viewModel.pdfViewerState.collectAsStateWithLifecycle()
     val pdfViewportState by viewModel.pdfViewportState.collectAsStateWithLifecycle()
     val activeDocumentState by viewModel.activeDocumentState.collectAsStateWithLifecycle()
@@ -265,19 +268,44 @@ fun ReadMeScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
+                    containerColor = if (currentBackgroundBitmap != null) Color.Transparent else MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                     navigationIconContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = if (currentBackgroundBitmap != null) Color.Transparent else MaterialTheme.colorScheme.background
     ) { innerPadding ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
+            modifier = Modifier.fillMaxSize()
         ) {
+            if (currentBackgroundBitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = currentBackgroundBitmap!!,
+                    contentDescription = "Dynamic Background Wallpaper",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.35f),
+                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.50f),
+                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.65f)
+                                )
+                            )
+                        )
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
             if (pdfViewerState is PdfViewerState.Active) {
                 val activePdf = pdfViewerState as PdfViewerState.Active
                 Column(
@@ -797,7 +825,6 @@ fun CrossAppTextSection(
                 )
             }
         }
-    }
 
     if (showDisclosureDialog) {
         AlertDialog(
@@ -858,4 +885,6 @@ fun CrossAppTextSection(
             }
         )
     }
+}
+}
 }

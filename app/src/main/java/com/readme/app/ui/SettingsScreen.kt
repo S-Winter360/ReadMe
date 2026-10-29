@@ -88,6 +88,22 @@ fun SettingsScreen(
     val availableVoices by viewModel.availableVoices.collectAsStateWithLifecycle()
     val isBubbleClosedByUser by viewModel.isBubbleClosedByUser.collectAsStateWithLifecycle()
     val calibrations by viewModel.pageTurnCalibrations.collectAsStateWithLifecycle()
+    val currentBackgroundImageName by viewModel.currentBackgroundImageName.collectAsStateWithLifecycle()
+    val availableBackgrounds by viewModel.availableBackgrounds.collectAsStateWithLifecycle()
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.importBackgroundImages(uris, context.contentResolver) { count ->
+                android.widget.Toast.makeText(
+                    context,
+                    "Imported $count background image(s)",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     var isAccessibilityEnabled by remember {
         mutableStateOf(ReadMeAccessibilityService.isServiceEnabled(context))
@@ -216,6 +232,8 @@ fun SettingsScreen(
                 onValueChange = { viewModel.updateSpeechVolume(it / 100f) },
                 valueRange = 0f..100f
             )
+
+
 
             Text(
                 text = "Floating ReadMe & Cross-App Controls",
