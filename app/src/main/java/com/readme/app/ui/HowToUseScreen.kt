@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.readme.app.R
+import com.readme.app.ui.theme.readmePressFeedback
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +101,7 @@ fun HowToUseScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
+                    .readmePressFeedback()
                     .testTag("how_to_use_replay_onboarding_button"),
                 colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.primary

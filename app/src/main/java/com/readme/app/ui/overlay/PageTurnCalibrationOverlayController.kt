@@ -163,7 +163,11 @@ class PageTurnCalibrationOverlayController(private val context: Context) {
             }
             private val textPaint = Paint().apply {
                 color = Color.WHITE
-                textSize = 15f * dm.scaledDensity
+                textSize = android.util.TypedValue.applyDimension(
+                    android.util.TypedValue.COMPLEX_UNIT_SP,
+                    15f,
+                    dm
+                )
                 textAlign = Paint.Align.CENTER
                 isFakeBoldText = true
                 isAntiAlias = true

@@ -29,6 +29,29 @@ class SystemFloatingBubbleController(private val context: Context) {
     val isShowing: Boolean
         get() = isAdded
 
+    private data class ScreenMetrics(val widthPixels: Int, val heightPixels: Int, val density: Float)
+
+    private fun getScreenMetrics(): ScreenMetrics {
+        val wm = windowManager
+        if (wm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val bounds = wm.currentWindowMetrics.bounds
+                val dm = context.resources.displayMetrics
+                return ScreenMetrics(
+                    widthPixels = bounds.width().coerceAtLeast(1),
+                    heightPixels = bounds.height().coerceAtLeast(1),
+                    density = dm.density
+                )
+            } catch (_: Throwable) {}
+        }
+        val dm = context.resources.displayMetrics
+        return ScreenMetrics(
+            widthPixels = dm.widthPixels.coerceAtLeast(1),
+            heightPixels = dm.heightPixels.coerceAtLeast(1),
+            density = dm.density
+        )
+    }
+
     init {
         ReadMeCrashLogger.currentControllerInstanceId = controllerInstanceId
         windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
@@ -77,15 +100,14 @@ class SystemFloatingBubbleController(private val context: Context) {
                         val lp = layoutParams as? WindowManager.LayoutParams
                         val currentWm = windowManager
                         if (lp != null && currentWm != null) {
-                            val dm = DisplayMetrics()
-                            currentWm.defaultDisplay?.getMetrics(dm)
+                            val metrics = getScreenMetrics()
                             val (clampedX, clampedY) = clampPosition(
                                 lp.x,
                                 lp.y,
                                 newWidth,
                                 newHeight,
-                                dm.widthPixels,
-                                dm.heightPixels
+                                metrics.widthPixels,
+                                metrics.heightPixels
                             )
                             if (lp.x != clampedX || lp.y != clampedY) {
                                 lp.x = clampedX
@@ -153,15 +175,14 @@ class SystemFloatingBubbleController(private val context: Context) {
             // Already added: ensure position is clamped
             val params = view.layoutParams as? WindowManager.LayoutParams
             if (params != null) {
-                val dm = DisplayMetrics()
-                wm.defaultDisplay?.getMetrics(dm)
+                val metrics = getScreenMetrics()
                 val (clampedX, clampedY) = clampPosition(
                     params.x,
                     params.y,
                     view.width,
                     view.height,
-                    dm.widthPixels,
-                    dm.heightPixels
+                    metrics.widthPixels,
+                    metrics.heightPixels
                 )
                 if (params.x != clampedX || params.y != clampedY) {
                     params.x = clampedX
@@ -224,15 +245,14 @@ class SystemFloatingBubbleController(private val context: Context) {
         // Clamp bubble within screen bounds
         val params = view.layoutParams as? WindowManager.LayoutParams
         if (params != null && wm != null) {
-            val displayMetrics = DisplayMetrics()
-            wm.defaultDisplay?.getMetrics(displayMetrics)
+            val metrics = getScreenMetrics()
             val (clampedX, clampedY) = clampPosition(
                 params.x,
                 params.y,
                 view.width,
                 view.height,
-                displayMetrics.widthPixels,
-                displayMetrics.heightPixels
+                metrics.widthPixels,
+                metrics.heightPixels
             )
             if (params.x != clampedX || params.y != clampedY) {
                 params.x = clampedX
@@ -272,17 +292,16 @@ class SystemFloatingBubbleController(private val context: Context) {
 
     private fun handleDrag(view: View, dx: Float, dy: Float) {
         val params = view.layoutParams as? WindowManager.LayoutParams ?: return
-        val displayMetrics = DisplayMetrics()
-        windowManager?.defaultDisplay?.getMetrics(displayMetrics)
+        val metrics = getScreenMetrics()
 
         params.x = (params.x + dx.toInt())
         params.y = (params.y + dy.toInt())
 
-        val thresholdPx = (140 * displayMetrics.density).toInt()
+        val thresholdPx = (140 * metrics.density).toInt()
         val inCloseZone = isPositionInCloseZone(
             bubbleY = params.y,
             bubbleHeight = view.height,
-            screenHeight = displayMetrics.heightPixels,
+            screenHeight = metrics.heightPixels,
             thresholdPx = thresholdPx
         )
         closeZoneController?.setHovered(inCloseZone)
@@ -294,15 +313,14 @@ class SystemFloatingBubbleController(private val context: Context) {
 
     private fun handleDragEnd(view: View, onCloseBubble: () -> Unit) {
         val params = view.layoutParams as? WindowManager.LayoutParams
-        val displayMetrics = DisplayMetrics()
-        windowManager?.defaultDisplay?.getMetrics(displayMetrics)
-        val thresholdPx = (140 * displayMetrics.density).toInt()
+        val metrics = getScreenMetrics()
+        val thresholdPx = (140 * metrics.density).toInt()
 
         val releasedInCloseZone = if (params != null) {
             isPositionInCloseZone(
                 bubbleY = params.y,
                 bubbleHeight = view.height,
-                screenHeight = displayMetrics.heightPixels,
+                screenHeight = metrics.heightPixels,
                 thresholdPx = thresholdPx
             )
         } else false
@@ -317,8 +335,8 @@ class SystemFloatingBubbleController(private val context: Context) {
                 params.y,
                 view.width,
                 view.height,
-                displayMetrics.widthPixels,
-                displayMetrics.heightPixels
+                metrics.widthPixels,
+                metrics.heightPixels
             )
             params.x = clampedX
             params.y = clampedY
@@ -331,15 +349,14 @@ class SystemFloatingBubbleController(private val context: Context) {
     private fun handleDragCancel(view: View) {
         closeZoneController?.hide()
         val params = view.layoutParams as? WindowManager.LayoutParams ?: return
-        val displayMetrics = DisplayMetrics()
-        windowManager?.defaultDisplay?.getMetrics(displayMetrics)
+        val metrics = getScreenMetrics()
         val (clampedX, clampedY) = clampPosition(
             params.x,
             params.y,
             view.width,
             view.height,
-            displayMetrics.widthPixels,
-            displayMetrics.heightPixels
+            metrics.widthPixels,
+            metrics.heightPixels
         )
         params.x = clampedX
         params.y = clampedY

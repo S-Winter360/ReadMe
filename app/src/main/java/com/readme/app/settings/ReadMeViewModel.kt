@@ -110,6 +110,23 @@ class ReadMeViewModel @JvmOverloads constructor(
         initialValue = ReadMeSettings()
     )
 
+    private val _completedOnboardingThisSession = MutableStateFlow<Boolean?>(null)
+
+    val startupState: StateFlow<com.readme.app.ui.navigation.StartupState> = combine(
+        repository.settingsFlow,
+        _completedOnboardingThisSession
+    ) { settings, sessionCompleted ->
+        when {
+            sessionCompleted == true || settings.isOnboardingCompleted -> com.readme.app.ui.navigation.StartupState.Ready
+            sessionCompleted == false -> com.readme.app.ui.navigation.StartupState.NeedsOnboarding
+            else -> com.readme.app.ui.navigation.StartupState.NeedsOnboarding
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = com.readme.app.ui.navigation.StartupState.Loading
+    )
+
     val isScreenOcrSupported: Boolean
         get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
 
@@ -296,6 +313,7 @@ class ReadMeViewModel @JvmOverloads constructor(
     }
 
     fun updateOnboardingCompleted(completed: Boolean) {
+        _completedOnboardingThisSession.value = completed
         viewModelScope.launch {
             repository.updateOnboardingCompleted(completed)
         }

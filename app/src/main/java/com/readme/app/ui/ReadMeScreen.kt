@@ -53,7 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -82,6 +82,7 @@ import com.readme.app.ui.theme.DarkSurface
 import com.readme.app.ui.theme.TealAccent
 import com.readme.app.ui.theme.TextPrimary
 import com.readme.app.ui.theme.TextSecondary
+import com.readme.app.ui.theme.readmePressFeedback
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -164,6 +165,7 @@ fun ReadMeScreen(
                             onClick = { menuExpanded = true },
                             modifier = Modifier
                                 .size(48.dp)
+                                .readmePressFeedback(targetScale = 0.94f)
                                 .testTag("menu_button")
                         ) {
                             Box(
@@ -246,6 +248,7 @@ fun ReadMeScreen(
                         onClick = onNavigateToAccount,
                         modifier = Modifier
                             .size(48.dp)
+                            .readmePressFeedback(targetScale = 0.94f)
                             .testTag("home_account_button")
                     ) {
                         Box(

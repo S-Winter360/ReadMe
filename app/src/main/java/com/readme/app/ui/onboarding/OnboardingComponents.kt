@@ -38,6 +38,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import com.readme.app.ui.theme.readmePressFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -133,6 +134,7 @@ fun OnboardingPrimaryButton(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 54.dp)
+            .readmePressFeedback()
             .clip(RoundedCornerShape(60.dp))
             .background(gradient)
             .clickable(
@@ -174,12 +176,19 @@ fun OnboardingToggleCard(
     modifier: Modifier = Modifier,
     testTag: String = "onboarding_toggle_card"
 ) {
+    val animatedBorderColor by animateColorAsState(
+        targetValue = if (checked) OnboardingColors.PrimaryTeal.copy(alpha = 0.7f) else OnboardingColors.CardBorder,
+        animationSpec = tween(durationMillis = 200),
+        label = "ToggleCardBorder"
+    )
+
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .readmePressFeedback(targetScale = 0.985f)
             .clip(RoundedCornerShape(18.dp))
             .background(OnboardingColors.CardBackground)
-            .border(1.dp, OnboardingColors.CardBorder, RoundedCornerShape(18.dp))
+            .border(1.dp, animatedBorderColor, RoundedCornerShape(18.dp))
             .clickable { onCheckedChange(!checked) }
             .semantics {
                 contentDescription = "$title, $subtitle, ${if (checked) "enabled" else "disabled"}"

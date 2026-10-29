@@ -51,12 +51,15 @@ android {
     buildTypes {
         release {
             isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             val releaseSigning = signingConfigs.getByName("release")
             if (releaseSigning.storeFile != null && releaseSigning.storeFile!!.exists()) {
                 signingConfig = releaseSigning
-            }
-            optimization {
-                enable = false
             }
         }
         debug {

@@ -1,5 +1,6 @@
 package com.readme.app.ui.components
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -7,16 +8,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.readme.app.R
+import com.readme.app.ui.theme.readmePressFeedback
 
 /**
  * Repolished bold, geometrically centered back/return navigation button.
- * Uses a crisp vector drawable with 48dp accessible touch target.
+ * Uses a crisp vector drawable with 48dp accessible touch target and subtle press feedback.
  */
 @Composable
 fun ReadMeBackButton(
@@ -24,10 +27,14 @@ fun ReadMeBackButton(
     modifier: Modifier = Modifier,
     contentDescription: String = "Navigate Back"
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+
     IconButton(
         onClick = onClick,
+        interactionSource = interactionSource,
         modifier = modifier
             .size(48.dp)
+            .readmePressFeedback(interactionSource = interactionSource, targetScale = 0.94f)
             .testTag("back_button")
     ) {
         Box(

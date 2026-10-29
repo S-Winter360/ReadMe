@@ -1,7 +1,11 @@
 package com.readme.app.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import com.readme.app.ui.theme.ReadMeMotion
+import com.readme.app.ui.theme.readmePressFeedback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -368,17 +372,29 @@ private fun ActiveVoiceRow(
     onSelect: () -> Unit,
     onPreview: ((ReadMeVoice) -> Unit)?
 ) {
+    val animatedBorderColor by animateColorAsState(
+        targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(durationMillis = ReadMeMotion.DurationFast),
+        label = "VoiceBorder"
+    )
+    val animatedContainerColor by animateColorAsState(
+        targetValue = if (isSelected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        animationSpec = tween(durationMillis = ReadMeMotion.DurationFast),
+        label = "VoiceContainer"
+    )
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .readmePressFeedback(targetScale = 0.985f)
             .clip(RoundedCornerShape(8.dp))
             .border(
                 width = if (isSelected) 1.5.dp else 1.dp,
-                color = if (isSelected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant
-                },
+                color = animatedBorderColor,
                 shape = RoundedCornerShape(8.dp)
             )
             .clickable(
@@ -390,11 +406,7 @@ private fun ActiveVoiceRow(
                 contentDescription = "${voice.displayName}, ${voice.genderDescriptor ?: ""}, ${voice.qualityDescriptor ?: ""}"
             }
             .testTag("voice_item_${voice.id}"),
-        color = if (isSelected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-        } else {
-            MaterialTheme.colorScheme.surface
-        }
+        color = animatedContainerColor
     ) {
         Row(
             modifier = Modifier

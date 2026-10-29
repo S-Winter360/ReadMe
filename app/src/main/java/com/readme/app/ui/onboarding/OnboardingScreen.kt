@@ -96,7 +96,8 @@ import kotlinx.coroutines.launch
 fun OnboardingScreen(
     viewModel: ReadMeViewModel,
     onFinishOnboarding: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isReplay: Boolean = false
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -174,7 +175,11 @@ fun OnboardingScreen(
                 pagerState.animateScrollToPage(pagerState.currentPage - 1)
             }
         } else {
-            (context as? Activity)?.finish()
+            if (isReplay) {
+                onFinishOnboarding()
+            } else {
+                (context as? Activity)?.finish()
+            }
         }
     }
 
@@ -236,7 +241,6 @@ fun OnboardingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .statusBarsPadding()
         ) {
             // Top Bar: 5-dot Progress Indicator & Skip Action
             Row(

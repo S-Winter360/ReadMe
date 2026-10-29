@@ -153,12 +153,12 @@ fun PdfReaderView(
                                     firstVisiblePage: Int,
                                     visiblePagesCount: Int,
                                     pageLocations: android.util.SparseArray<android.graphics.RectF>,
-                                    zoom: Float
+                                    zoomLevel: Float
                                 ) {
                                     val state = PdfViewportState(
                                         firstVisiblePage = firstVisiblePage,
                                         visiblePagesCount = visiblePagesCount,
-                                        zoom = zoom
+                                        zoom = zoomLevel
                                     )
                                     currentOnViewportChanged(state)
                                 }

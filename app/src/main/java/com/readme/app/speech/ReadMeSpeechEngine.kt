@@ -440,6 +440,7 @@ open class ReadMeSpeechEngine(context: Context? = null) {
             activeSubId = 0L
             activeSegmentId = ""
             activeSegmentText = ""
+            speechListener = null
             try {
                 tts?.stop()
                 tts?.shutdown()

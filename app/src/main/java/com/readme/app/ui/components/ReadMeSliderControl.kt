@@ -1,5 +1,10 @@
 package com.readme.app.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.readme.app.ui.theme.ReadMeMotion
 
 @Composable
 fun ReadMeSliderControl(
@@ -33,11 +39,20 @@ fun ReadMeSliderControl(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
-            Text(
-                text = valueString,
-                style = MaterialTheme.typography.displaySmall,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            AnimatedContent(
+                targetState = valueString,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(durationMillis = ReadMeMotion.DurationFast)) togetherWith
+                        fadeOut(animationSpec = tween(durationMillis = ReadMeMotion.DurationFast))
+                },
+                label = "SliderValueTransition"
+            ) { targetValueText ->
+                Text(
+                    text = targetValueText,
+                    style = MaterialTheme.typography.displaySmall,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
         }
         Slider(
             value = value,

@@ -119,10 +119,12 @@ object ReadMeCrashLogger {
         val fullStackTrace = sw.toString()
 
         val runtime = Runtime.getRuntime()
+        @Suppress("DEPRECATION")
+        val threadId = thread.id
         val crashInfo = CrashInfo(
             timestamp = System.currentTimeMillis(),
             threadName = thread.name,
-            threadId = thread.id,
+            threadId = threadId,
             exceptionClass = throwable.javaClass.name,
             message = throwable.message,
             stackTrace = fullStackTrace,
@@ -152,7 +154,7 @@ object ReadMeCrashLogger {
 
         val logOutput = buildString {
             appendLine("================ FATAL EXCEPTION CAUGHT BY README CRASH LOGGER ================")
-            appendLine("Thread: ${thread.name} (id: ${thread.id}, isDaemon: ${thread.isDaemon})")
+            appendLine("Thread: ${thread.name} (id: $threadId, isDaemon: ${thread.isDaemon})")
             appendLine("Exception: ${throwable.javaClass.name}: ${throwable.message}")
             appendLine("Android SDK: ${Build.VERSION.SDK_INT} (${Build.VERSION.RELEASE})")
             appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})")
