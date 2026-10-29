@@ -11,4 +11,73 @@
     <string name="accessibility_disclosure_action">Go to Settings</string>
     <string name="screen_ocr_disclosure_action">Allow &amp; Continue</string>
     <string name="cancel">Cancel</string>
+
+    <!-- Onboarding common -->
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_get_started">Get Started</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_start_reading">Start Reading</string>
+
+    <!-- Onboarding Screen 1: Welcome -->
+    <string name="onboarding_welcome_title">Welcome to ReadMe</string>
+    <string name="onboarding_welcome_subtitle">Turn your favorite comics and novels into stories you can listen to.</string>
+    <string name="onboarding_benefit_1_title">Listen to stories</string>
+    <string name="onboarding_benefit_1_subtitle">Comics and novels, read to you</string>
+    <string name="onboarding_benefit_2_title">Sit back &amp; relax</string>
+    <string name="onboarding_benefit_2_subtitle">Rest your eyes and just listen</string>
+    <string name="onboarding_benefit_3_title">Your favorites</string>
+    <string name="onboarding_benefit_3_subtitle">The stories you already love</string>
+    <string name="onboarding_benefit_4_title">Free to enjoy</string>
+    <string name="onboarding_benefit_4_subtitle">Start listening at no cost</string>
+
+    <!-- Onboarding Screen 2: Floating Bubble -->
+    <string name="onboarding_bubble_title">Turn on the floating bubble</string>
+    <string name="onboarding_bubble_subtitle">A small bubble floats over any app, so ReadMe is always one tap away.</string>
+    <string name="onboarding_bubble_toggle_title">Floating Bubble</string>
+    <string name="onboarding_bubble_toggle_subtitle">Allow display over other apps</string>
+
+    <!-- Onboarding Screen 3: Screen Reading -->
+    <string name="onboarding_reading_title">Enable screen reading</string>
+    <string name="onboarding_reading_subtitle">ReadMe automatically captures the text on your screen and reads it aloud.</string>
+    <string name="onboarding_reading_toggle_title">Screen Reading</string>
+    <string name="onboarding_reading_toggle_subtitle">Turn on in Accessibility settings</string>
+    <string name="onboarding_reading_dialog_title">Enable Screen Reading</string>
+    <string name="onboarding_reading_dialog_message">ReadMe uses Android\'s Accessibility Service only to read on-screen text aloud.\n\n• What it reads: Visible text or story content on your screen when you tap the floating bubble.\n• Privacy &amp; Safety: All text is processed 100% locally on your device in memory. Nothing is ever collected, stored, or shared.\n• Control: Reading occurs ONLY when you tap to read.\n\nTo enable, find \"ReadMe Text Reader\" in Accessibility Settings and switch it on.</string>
+    <string name="onboarding_reading_agree">Agree</string>
+    <string name="onboarding_reading_no_thanks">No thanks</string>
+    <string name="onboarding_reading_accessibility_hint">Find \"ReadMe Text Reader\" and turn it on</string>
+
+    <!-- Onboarding Screen 4: Auto Turn Page -->
+    <string name="onboarding_autonav_title">Pages turn by themselves</string>
+    <string name="onboarding_autonav_subtitle">ReadMe flips or scrolls to the next page right when it finishes reading.</string>
+    <string name="onboarding_autonav_toggle_title">Auto Turn Page</string>
+    <string name="onboarding_autonav_toggle_subtitle">Flip or scroll automatically</string>
+    <string name="onboarding_autonav_requires_accessibility">Note: Screen reading must be enabled in Accessibility settings for automatic page turns.</string>
+
+    <!-- Onboarding Screen 5: Ready -->
+    <string name="onboarding_ready_title">You\'re all set!</string>
+    <string name="onboarding_ready_subtitle">Proceed and enjoy ReadMe — completely free.</string>
+    <string name="onboarding_ready_bubble_ready">Floating bubble ready</string>
+    <string name="onboarding_ready_bubble_not_enabled">Floating bubble not enabled yet</string>
+    <string name="onboarding_ready_screen_reading_ready">Screen reading ready</string>
+    <string name="onboarding_ready_screen_reading_not_enabled">Screen reading not enabled yet</string>
+    <string name="onboarding_ready_auto_turn_ready">Auto page turn ready</string>
+    <string name="onboarding_ready_auto_turn_not_enabled">Auto page turn not enabled yet</string>
+    <string name="onboarding_replay_button">Replay Onboarding</string>
+
+    <!-- Notification & Playback -->
+    <string name="notification_channel_name">ReadMe Reading Playback</string>
+    <string name="notification_channel_desc">Controls and status for background reading in ReadMe</string>
+    <string name="notification_title_reading">ReadMe is reading</string>
+    <string name="notification_title_paused">ReadMe is paused</string>
+    <string name="notification_title_completed">ReadMe — Reading completed</string>
+    <string name="notification_action_previous">Previous</string>
+    <string name="notification_action_pause">Pause</string>
+    <string name="notification_action_resume">Resume</string>
+    <string name="notification_action_next">Next</string>
+    <string name="notification_action_stop">Stop</string>
+    <string name="notification_status_reading">Reading in progress…</string>
+    <string name="notification_status_paused">Reading paused</string>
+    <string name="notification_status_completed">Reading completed</string>
+    <string name="notification_status_ready">Ready to read</string>
 </resources>

@@ -79,6 +79,9 @@ class ReadMeReadingSessionRuntime(
     val activeDocumentState: StateFlow<ActiveDocumentState> = sessionCoordinator.activeDocumentState
     val readingSessionState: StateFlow<ActiveReadingSessionState> = sessionCoordinator.readingSessionState
 
+    private val _currentReadingSentence = MutableStateFlow<String?>(null)
+    val currentReadingSentence: StateFlow<String?> = _currentReadingSentence.asStateFlow()
+
     private val _savedProgressState = MutableStateFlow<SavedProgressState>(SavedProgressState.None)
     val savedProgressState: StateFlow<SavedProgressState> = _savedProgressState.asStateFlow()
 
@@ -177,7 +180,13 @@ class ReadMeReadingSessionRuntime(
         // Set up the authoritative speech progression listener
         speechEngine.setSpeechListener(object : SpeechEngineListener {
             override fun onSegmentStarted(segmentId: String, sessionId: Long) {
-                // Segment speech started
+                if (sessionId == activeSessionId && activeSessionId != 0L) {
+                    val cur = readingEngine.currentPosition.value?.let { readingEngine.resolvePosition(it) }
+                        ?: readingEngine.currentSegment.value
+                    if (cur != null) {
+                        _currentReadingSentence.value = cur.text.trim()
+                    }
+                }
             }
 
             override fun onSegmentCompleted(segmentId: String, sessionId: Long) {
@@ -211,6 +220,7 @@ class ReadMeReadingSessionRuntime(
         val isEphemeral = isEphemeralActive
         val nextSegment = sessionCoordinator.advanceReading()
         if (nextSegment != null) {
+            _currentReadingSentence.value = nextSegment.text.trim()
             if (!isEphemeral) {
                 saveCurrentProgress(isCompleted = false)
             }
@@ -225,6 +235,7 @@ class ReadMeReadingSessionRuntime(
                 volume = settings.speechVolume
             )
         } else {
+            _currentReadingSentence.value = null
             sessionCoordinator.onReadingCompleted()
             if (!isEphemeral) {
                 saveCurrentProgress(isCompleted = true)
@@ -235,6 +246,7 @@ class ReadMeReadingSessionRuntime(
 
     private fun handleSegmentError(segmentId: String, sessionId: Long, errorCode: Int) {
         if (sessionId != activeSessionId || activeSessionId == 0L) return
+        _currentReadingSentence.value = null
         val message = "Speech error: $errorCode"
         sessionCoordinator.onReadingError(message)
         notifyError(message)
@@ -279,6 +291,7 @@ class ReadMeReadingSessionRuntime(
 
         val segmentToSpeak = sessionCoordinator.startReading()
         if (segmentToSpeak != null) {
+            _currentReadingSentence.value = segmentToSpeak.text.trim()
             if (!isEphemeralActive) {
                 saveCurrentProgress(isCompleted = false)
             }
@@ -300,9 +313,17 @@ class ReadMeReadingSessionRuntime(
     /**
      * Pauses the reading session and halts speech synthesis.
      * Preserves current document, position, and highlight according to pause behaviour.
+     * Keeps current sentence cached for display in paused notification.
      */
     fun pauseReading() {
-        stopReading()
+        restartJob?.cancel()
+        activeSessionId = 0L
+        sessionCoordinator.stopReading()
+        speechEngine.stop()
+        if (!isEphemeralActive) {
+            saveCurrentProgress(isCompleted = false)
+        }
+        notifyStopped()
     }
 
     /**
@@ -324,7 +345,97 @@ class ReadMeReadingSessionRuntime(
         if (!isEphemeralActive) {
             saveCurrentProgress(isCompleted = false)
         }
+        _currentReadingSentence.value = null
         notifyStopped()
+    }
+
+    /**
+     * Returns to the preceding reading segment using the authoritative reading engine.
+     * If reading is currently active, immediately synthesizes the preceding segment.
+     * If paused, updates reading position and current sentence while remaining paused.
+     */
+    fun skipToPrevious(): ReadingSegment? {
+        if (!sessionCoordinator.hasActiveDocument) return null
+        val wasReading = readingSessionState.value.isReading
+
+        restartJob?.cancel()
+        activeSessionId = 0L
+        speechEngine.stop()
+
+        val prevSegment = sessionCoordinator.previousReading()
+        if (prevSegment != null) {
+            _currentReadingSentence.value = prevSegment.text.trim()
+            if (!isEphemeralActive) {
+                saveCurrentProgress(isCompleted = false)
+            }
+            if (wasReading) {
+                activeSessionId = System.currentTimeMillis()
+                val thisSessionId = activeSessionId
+                val settings = latestSettings
+                sessionCoordinator.syncSessionState(speechState = TtsState.Speaking)
+                speechEngine.speakSegment(
+                    segmentId = prevSegment.id,
+                    text = prevSegment.text,
+                    sessionId = thisSessionId,
+                    voiceId = settings.selectedVoice,
+                    speed = settings.speechSpeed,
+                    pitch = settings.speechPitch,
+                    volume = settings.speechVolume
+                )
+                notifyStarted()
+            } else {
+                sessionCoordinator.syncSessionState(speechState = TtsState.Stopped)
+            }
+        }
+        return prevSegment
+    }
+
+    /**
+     * Advances to the next reading segment using the authoritative reading engine.
+     * If reading is currently active, immediately synthesizes the next segment.
+     * If paused, updates reading position and current sentence while remaining paused.
+     */
+    fun skipToNext(): ReadingSegment? {
+        if (!sessionCoordinator.hasActiveDocument) return null
+        val wasReading = readingSessionState.value.isReading
+
+        restartJob?.cancel()
+        activeSessionId = 0L
+        speechEngine.stop()
+
+        val nextSegment = sessionCoordinator.skipToNextReading()
+        if (nextSegment != null) {
+            _currentReadingSentence.value = nextSegment.text.trim()
+            if (!isEphemeralActive) {
+                saveCurrentProgress(isCompleted = false)
+            }
+            if (wasReading) {
+                activeSessionId = System.currentTimeMillis()
+                val thisSessionId = activeSessionId
+                val settings = latestSettings
+                sessionCoordinator.syncSessionState(speechState = TtsState.Speaking)
+                speechEngine.speakSegment(
+                    segmentId = nextSegment.id,
+                    text = nextSegment.text,
+                    sessionId = thisSessionId,
+                    voiceId = settings.selectedVoice,
+                    speed = settings.speechSpeed,
+                    pitch = settings.speechPitch,
+                    volume = settings.speechVolume
+                )
+                notifyStarted()
+            } else {
+                sessionCoordinator.syncSessionState(speechState = TtsState.Stopped)
+            }
+        } else {
+            _currentReadingSentence.value = null
+            sessionCoordinator.onReadingCompleted()
+            if (!isEphemeralActive) {
+                saveCurrentProgress(isCompleted = true)
+            }
+            notifyCompleted()
+        }
+        return nextSegment
     }
 
     /**
@@ -492,12 +603,15 @@ class ReadMeReadingSessionRuntime(
         if (progress != null && safePosition != null) {
             if (progress.isCompleted) {
                 _savedProgressState.value = SavedProgressState.Completed(progress)
+                _currentReadingSentence.value = null
             } else {
                 sessionCoordinator.setPosition(safePosition)
                 _savedProgressState.value = SavedProgressState.Resumable(progress)
+                _currentReadingSentence.value = doc.resolvePosition(safePosition)?.text?.trim()
             }
         } else {
             _savedProgressState.value = SavedProgressState.None
+            _currentReadingSentence.value = null
         }
     }
 

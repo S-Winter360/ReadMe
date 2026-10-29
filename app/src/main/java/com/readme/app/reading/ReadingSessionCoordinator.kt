@@ -172,6 +172,26 @@ class ReadingSessionCoordinator(
     }
 
     /**
+     * Moves to the previous reading segment.
+     */
+    fun previousReading(): ReadingSegment? {
+        if (!hasActiveDocument) return null
+        val segment = readingEngine.previous()
+        syncSessionState()
+        return segment
+    }
+
+    /**
+     * Skips forward to the next reading segment regardless of play/pause state.
+     */
+    fun skipToNextReading(): ReadingSegment? {
+        if (!hasActiveDocument) return null
+        val segment = readingEngine.skipToNext()
+        syncSessionState()
+        return segment
+    }
+
+    /**
      * Called when speech completes for the final segment.
      */
     fun onReadingCompleted() {

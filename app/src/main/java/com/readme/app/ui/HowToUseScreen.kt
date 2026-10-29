@@ -14,12 +14,19 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.readme.app.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HowToUseScreen(onNavigateBack: () -> Unit) {
+fun HowToUseScreen(
+    onNavigateBack: () -> Unit,
+    onReplayOnboarding: () -> Unit = {}
+) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -87,6 +94,24 @@ fun HowToUseScreen(onNavigateBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(bottom = 24.dp)
             )
+
+            androidx.compose.material3.OutlinedButton(
+                onClick = onReplayOnboarding,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("how_to_use_replay_onboarding_button"),
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text(
+                    text = stringResource(R.string.onboarding_replay_button),
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }

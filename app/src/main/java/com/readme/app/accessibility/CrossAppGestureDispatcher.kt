@@ -11,4 +11,5 @@ package com.readme.app.accessibility
 interface CrossAppGestureDispatcher {
     val canDispatchGestures: Boolean
     suspend fun performTap(x: Float, y: Float, durationMs: Long = 80L): Boolean
+    suspend fun performSwipe(startX: Float, startY: Float, endX: Float, endY: Float, durationMs: Long = 250L): Boolean = false
 }

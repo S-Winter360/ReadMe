@@ -192,6 +192,69 @@ class ReadingEngine(
     }
 
     /**
+     * Moves to the previous non-blank segment in the document.
+     * Updates current position and segment, and keeps state consistent.
+     */
+    fun previous(): ReadingSegment? {
+        val segments = getSegments()
+        if (segments.isEmpty()) return null
+
+        val currentIndex = _currentSegmentIndex.value
+        var targetIndex = currentIndex - 1
+        while (targetIndex >= 0 && segments[targetIndex].text.isBlank()) {
+            targetIndex--
+        }
+
+        if (targetIndex >= 0) {
+            _currentSegmentIndex.value = targetIndex
+            _currentSegment.value = segments[targetIndex]
+            _currentPosition.value = currentDocument.positionForIndex(targetIndex)
+            if (_readingState.value == ReadingSessionState.Completed) {
+                _readingState.value = ReadingSessionState.Stopped
+            }
+            return segments[targetIndex]
+        } else {
+            var firstIdx = 0
+            while (firstIdx < segments.size && segments[firstIdx].text.isBlank()) {
+                firstIdx++
+            }
+            if (firstIdx < segments.size) {
+                _currentSegmentIndex.value = firstIdx
+                _currentSegment.value = segments[firstIdx]
+                _currentPosition.value = currentDocument.positionForIndex(firstIdx)
+                return segments[firstIdx]
+            }
+            return null
+        }
+    }
+
+    /**
+     * Skips forward to the next non-blank segment regardless of whether the session is
+     * currently Reading or Stopped.
+     */
+    fun skipToNext(): ReadingSegment? {
+        val segments = getSegments()
+        if (segments.isEmpty()) return null
+
+        var nextIndex = _currentSegmentIndex.value + 1
+        while (nextIndex < segments.size && segments[nextIndex].text.isBlank()) {
+            nextIndex++
+        }
+
+        if (nextIndex < segments.size) {
+            _currentSegmentIndex.value = nextIndex
+            _currentSegment.value = segments[nextIndex]
+            _currentPosition.value = currentDocument.positionForIndex(nextIndex)
+            return segments[nextIndex]
+        } else {
+            _currentSegmentIndex.value = segments.size
+            _currentSegment.value = null
+            _readingState.value = ReadingSessionState.Completed
+            return null
+        }
+    }
+
+    /**
      * Stops the active reading session.
      * The last active position remains recorded.
      */

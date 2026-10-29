@@ -34,7 +34,6 @@ class ReadMeSettingsRepository(private val context: Context) {
         val AUTO_ADVANCE_SCREEN_READING_ENABLED = booleanPreferencesKey("auto_advance_screen_reading_enabled")
         val PAGED_READER_NAVIGATION_MODE = stringPreferencesKey("paged_reader_navigation_mode")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
-        val ONBOARDING_STARTED = booleanPreferencesKey("onboarding_started")
     }
 
     val settingsFlow: Flow<ReadMeSettings> = context.dataStore.data
@@ -62,20 +61,7 @@ class ReadMeSettingsRepository(private val context: Context) {
             } else {
                 PagedReaderNavigationMode.ACCESSIBILITY_ACTION
             }
-
-            val hasCompletedKey = preferences[PreferencesKeys.ONBOARDING_COMPLETED]
-            val hasStartedKey = preferences[PreferencesKeys.ONBOARDING_STARTED] ?: false
-
-            // Existing users from earlier versions who already configured settings or have preferences
-            // should not be forced through onboarding on app launch.
-            val isOnboardingCompleted = when {
-                hasCompletedKey != null -> hasCompletedKey
-                // If preferences contains keys other than onboarding keys, user has existing data
-                preferences.asMap().keys.any { 
-                    it != PreferencesKeys.ONBOARDING_COMPLETED && it != PreferencesKeys.ONBOARDING_STARTED 
-                } -> true
-                else -> false
-            }
+            val isOnboardingCompleted = preferences[PreferencesKeys.ONBOARDING_COMPLETED] ?: false
 
             // Validate/clamp numeric values
             val clampedVolume = volume.coerceIn(0.0f, 1.0f)
@@ -93,8 +79,7 @@ class ReadMeSettingsRepository(private val context: Context) {
                 isScreenOcrConsentGranted = isOcrConsentGranted,
                 isAutoAdvanceScreenReadingEnabled = isAutoAdvanceEnabled,
                 pagedReaderNavigationMode = pagedNavMode,
-                isOnboardingCompleted = isOnboardingCompleted,
-                isOnboardingStarted = hasStartedKey
+                isOnboardingCompleted = isOnboardingCompleted
             )
         }
 
@@ -193,16 +178,6 @@ class ReadMeSettingsRepository(private val context: Context) {
             }
         } catch (e: Exception) {
             android.util.Log.e("ReadMeSettingsRepo", "Error updating paged reader navigation mode", e)
-        }
-    }
-
-    suspend fun updateOnboardingStarted(started: Boolean) {
-        try {
-            context.dataStore.edit { preferences ->
-                preferences[PreferencesKeys.ONBOARDING_STARTED] = started
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("ReadMeSettingsRepo", "Error updating onboarding started", e)
         }
     }
 

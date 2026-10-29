@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
@@ -86,22 +87,28 @@ class ReadMeReadingService : Service() {
             sessionRuntime.isDocumentPickerActive
         ) { fg, dp -> fg to dp }
 
+        val sessionAndSentenceFlow = combine(
+            sessionRuntime.readingSessionState,
+            sessionRuntime.currentReadingSentence
+        ) { sessionState, currentSentence -> sessionState to currentSentence }
+
         serviceScope.launch {
             combine(
-                sessionRuntime.readingSessionState,
+                sessionAndSentenceFlow,
                 sessionRuntime.activeDocumentState,
                 foregroundAndPickerFlow,
                 settingsRepo.settingsFlow,
                 sessionRuntime.isBubbleClosedByUser
-            ) { sessionState, docState, fgAndDp, settings, isClosedByUser ->
+            ) { sessionAndSentence, docState, fgAndDp, settings, isClosedByUser ->
                 lastSettings = settings
                 BubbleAndNotificationState(
-                    sessionState = sessionState,
+                    sessionState = sessionAndSentence.first,
                     docState = docState,
                     isForeground = fgAndDp.first,
                     isDocumentPickerActive = fgAndDp.second,
                     settings = settings,
-                    isClosedByUser = isClosedByUser
+                    isClosedByUser = isClosedByUser,
+                    currentSentence = sessionAndSentence.second
                 )
             }.collect { state ->
                 updateNotificationAndBubble(state)
@@ -189,24 +196,21 @@ class ReadMeReadingService : Service() {
         }
         when (intent?.action) {
             ACTION_START_READING -> {
-                val initialNotification = buildNotification(
-                    sessionRuntime.readingSessionState.value,
-                    sessionRuntime.activeDocumentState.value
-                )
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        startForeground(
-                            NOTIFICATION_ID,
-                            initialNotification,
-                            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                        )
-                    } else {
-                        startForeground(NOTIFICATION_ID, initialNotification)
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to startForeground in onStartCommand: ${e.message}")
-                }
+                ensureForegroundStarted()
                 sessionRuntime.startReading()
+            }
+            ACTION_RESUME_READING -> {
+                ensureForegroundStarted()
+                sessionRuntime.resumeReading()
+            }
+            ACTION_PAUSE_READING -> {
+                sessionRuntime.pauseReading()
+            }
+            ACTION_PREVIOUS_SEGMENT -> {
+                sessionRuntime.skipToPrevious()
+            }
+            ACTION_NEXT_SEGMENT -> {
+                sessionRuntime.skipToNext()
             }
             ACTION_STOP_READING -> {
                 sessionRuntime.stopReading()
@@ -216,6 +220,27 @@ class ReadMeReadingService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    private fun ensureForegroundStarted() {
+        val initialNotification = buildNotification(
+            sessionState = sessionRuntime.readingSessionState.value,
+            docState = sessionRuntime.activeDocumentState.value,
+            currentSentence = sessionRuntime.currentReadingSentence.value
+        )
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    initialNotification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, initialNotification)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to startForeground in ensureForegroundStarted: ${e.message}")
+        }
     }
 
     private fun updateNotificationAndBubble(state: BubbleAndNotificationState) {
@@ -234,8 +259,12 @@ class ReadMeReadingService : Service() {
         )
 
         // Notification management
-        if (state.sessionState.isReading) {
-            val notification = buildNotification(state.sessionState, state.docState)
+        val hasActiveDoc = state.docState.hasActiveDocument
+        val isReading = state.sessionState.isReading
+        val isPaused = !isReading && hasActiveDoc && !state.sessionState.isCompleted && !state.sessionState.isError
+
+        if (isReading) {
+            val notification = buildNotification(state.sessionState, state.docState, state.currentSentence)
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
@@ -249,8 +278,23 @@ class ReadMeReadingService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to startForeground: ${e.message}")
             }
+        } else if (isPaused) {
+            // In paused state: detach from ongoing foreground service so user can dismiss if desired,
+            // while preserving interactive Resume/Next/Previous/Stop controls.
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_DETACH)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(false)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to stopForeground: ${e.message}")
+            }
+            val pausedNotification = buildNotification(state.sessionState, state.docState, state.currentSentence)
+            notificationManager.notify(NOTIFICATION_ID, pausedNotification)
         } else {
-            // Stopped or paused
+            // Stopped, completed, or no active document: clean up notification completely
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -261,9 +305,10 @@ class ReadMeReadingService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to stopForeground: ${e.message}")
             }
+            notificationManager.cancel(NOTIFICATION_ID)
 
-            // Only stop service if floating bubble is disabled AND not reading
-            if (!state.settings.isFloatingReadmeEnabled && !state.sessionState.isReading) {
+            // Only stop service if floating bubble is disabled AND not reading/paused
+            if (!state.settings.isFloatingReadmeEnabled) {
                 stopSelf()
             }
         }
@@ -357,7 +402,8 @@ class ReadMeReadingService : Service() {
                 isForeground = fg,
                 isDocumentPickerActive = dp,
                 settings = settings,
-                isClosedByUser = isClosed
+                isClosedByUser = isClosed,
+                currentSentence = sessionRuntime.currentReadingSentence.value
             )
         )
     }
@@ -503,57 +549,156 @@ class ReadMeReadingService : Service() {
 
     private fun buildNotification(
         sessionState: ActiveReadingSessionState,
-        docState: ActiveDocumentState
+        docState: ActiveDocumentState,
+        currentSentence: String?
     ): Notification {
+        val isReading = sessionState.isReading
+        val isCompleted = sessionState.isCompleted
+        val isError = sessionState.isError
+        val hasActiveDoc = docState.hasActiveDocument
+
         val title = when {
-            docState.isEphemeral -> "Reading Screen: ${docState.sourceAppLabel ?: "App"}"
-            docState.hasActiveDocument -> docState.displayName.ifBlank { docState.title }
-            else -> "ReadMe"
-        }
-        val text = when {
-            sessionState.isReading -> "Reading in progress..."
-            sessionState.isCompleted -> "Reading completed"
-            else -> "Ready to read"
+            docState.isEphemeral -> {
+                val label = docState.sourceAppLabel ?: "Screen"
+                if (isReading) "ReadMe is reading • $label" else "ReadMe is paused • $label"
+            }
+            hasActiveDoc -> {
+                val docTitle = docState.displayName.ifBlank { docState.title }
+                if (isReading) "ReadMe is reading • $docTitle" else "ReadMe is paused • $docTitle"
+            }
+            isCompleted -> getString(R.string.notification_title_completed)
+            isError -> "ReadMe — Error"
+            else -> if (isReading) getString(R.string.notification_title_reading) else "ReadMe"
         }
 
+        val text = when {
+            !currentSentence.isNullOrBlank() -> currentSentence
+            isReading -> getString(R.string.notification_status_reading)
+            isCompleted -> getString(R.string.notification_status_completed)
+            isError -> sessionState.errorMessage ?: "Speech error"
+            hasActiveDoc -> getString(R.string.notification_status_paused)
+            else -> getString(R.string.notification_status_ready)
+        }
+
+        // Tap on notification brings ReadMe to the foreground
         val openAppIntent = PendingIntent.getActivity(
             this,
-            0,
+            100,
             Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Previous Action
+        val prevIntent = PendingIntent.getService(
+            this,
+            101,
+            Intent(this, ReadMeReadingService::class.java).apply {
+                action = ACTION_PREVIOUS_SEGMENT
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Pause / Resume Toggle Action
+        val toggleAction = if (isReading) ACTION_PAUSE_READING else ACTION_RESUME_READING
+        val toggleTitle = if (isReading) {
+            getString(R.string.notification_action_pause)
+        } else {
+            getString(R.string.notification_action_resume)
+        }
+        val toggleIcon = if (isReading) R.drawable.ic_notif_pause else R.drawable.ic_notif_play
+        val toggleIntent = PendingIntent.getService(
+            this,
+            if (isReading) 102 else 103,
+            Intent(this, ReadMeReadingService::class.java).apply {
+                action = toggleAction
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Next Action
+        val nextIntent = PendingIntent.getService(
+            this,
+            104,
+            Intent(this, ReadMeReadingService::class.java).apply {
+                action = ACTION_NEXT_SEGMENT
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Stop Action
         val stopIntent = PendingIntent.getService(
             this,
-            1,
+            105,
             Intent(this, ReadMeReadingService::class.java).apply {
                 action = ACTION_STOP_READING
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+        val largeIconBitmap = try {
+            BitmapFactory.decodeResource(resources, R.drawable.app_logo)
+        } catch (_: Exception) {
+            null
+        }
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_readme_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(openAppIntent)
-            .addAction(R.drawable.ic_launcher_foreground, "Stop", stopIntent)
-            .setOngoing(sessionState.isReading)
+            .setOngoing(isReading)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build()
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setColor(0xFF298D85.toInt())
+            .setShowWhen(false)
+
+        if (largeIconBitmap != null) {
+            builder.setLargeIcon(largeIconBitmap)
+        }
+
+        if (!currentSentence.isNullOrBlank()) {
+            builder.setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText(currentSentence)
+                    .setSummaryText(if (isReading) "Reading" else "Paused")
+            )
+        }
+
+        // Action 1: Previous
+        builder.addAction(R.drawable.ic_notif_previous, getString(R.string.notification_action_previous), prevIntent)
+        // Action 2: Pause or Resume
+        builder.addAction(toggleIcon, toggleTitle, toggleIntent)
+        // Action 3: Next
+        builder.addAction(R.drawable.ic_notif_next, getString(R.string.notification_action_next), nextIntent)
+        // Action 4: Stop
+        builder.addAction(R.drawable.ic_notif_stop, getString(R.string.notification_action_stop), stopIntent)
+
+        if (!isReading) {
+            val deleteIntent = PendingIntent.getService(
+                this,
+                106,
+                Intent(this, ReadMeReadingService::class.java).apply {
+                    action = ACTION_STOP_READING
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.setDeleteIntent(deleteIntent)
+        }
+
+        return builder.build()
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "ReadMe Reading Playback",
+                getString(R.string.notification_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Controls and status for background reading in ReadMe"
+                description = getString(R.string.notification_channel_desc)
                 setShowBadge(false)
             }
             notificationManager.createNotificationChannel(channel)
@@ -587,7 +732,8 @@ class ReadMeReadingService : Service() {
         val isForeground: Boolean,
         val isDocumentPickerActive: Boolean,
         val settings: ReadMeSettings,
-        val isClosedByUser: Boolean
+        val isClosedByUser: Boolean,
+        val currentSentence: String?
     )
 
     companion object {
@@ -598,6 +744,10 @@ class ReadMeReadingService : Service() {
 
         const val ACTION_START_READING = "com.readme.app.action.START_READING"
         const val ACTION_STOP_READING = "com.readme.app.action.STOP_READING"
+        const val ACTION_PAUSE_READING = "com.readme.app.action.PAUSE_READING"
+        const val ACTION_RESUME_READING = "com.readme.app.action.RESUME_READING"
+        const val ACTION_PREVIOUS_SEGMENT = "com.readme.app.action.PREVIOUS_SEGMENT"
+        const val ACTION_NEXT_SEGMENT = "com.readme.app.action.NEXT_SEGMENT"
         const val ACTION_SYNC_SERVICE = "com.readme.app.action.SYNC_SERVICE"
 
         fun startReading(context: Context) {
@@ -618,6 +768,38 @@ class ReadMeReadingService : Service() {
         fun stopReading(context: Context) {
             val intent = Intent(context, ReadMeReadingService::class.java).apply {
                 action = ACTION_STOP_READING
+            }
+            context.startService(intent)
+        }
+
+        fun pauseReading(context: Context) {
+            val intent = Intent(context, ReadMeReadingService::class.java).apply {
+                action = ACTION_PAUSE_READING
+            }
+            context.startService(intent)
+        }
+
+        fun resumeReading(context: Context) {
+            val intent = Intent(context, ReadMeReadingService::class.java).apply {
+                action = ACTION_RESUME_READING
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun skipToPrevious(context: Context) {
+            val intent = Intent(context, ReadMeReadingService::class.java).apply {
+                action = ACTION_PREVIOUS_SEGMENT
+            }
+            context.startService(intent)
+        }
+
+        fun skipToNext(context: Context) {
+            val intent = Intent(context, ReadMeReadingService::class.java).apply {
+                action = ACTION_NEXT_SEGMENT
             }
             context.startService(intent)
         }

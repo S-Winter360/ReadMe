@@ -80,6 +80,46 @@ class ReadMeAccessibilityService : AccessibilityService(), CrossAppTextAcquirer,
         }
     }
 
+    /**
+     * Dispatches a single swipe gesture from (startX, startY) to (endX, endY).
+     * Used as a gesture fallback for automatic page scrolling when accessibility actions are not exposed.
+     */
+    override suspend fun performSwipe(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long
+    ): Boolean {
+        if (!canDispatchGestures) return false
+        return suspendCancellableCoroutine { continuation ->
+            try {
+                val path = Path()
+                path.moveTo(startX, startY)
+                path.lineTo(endX, endY)
+                val clampedDuration = durationMs.coerceIn(100L, 500L)
+                val stroke = GestureDescription.StrokeDescription(path, 0L, clampedDuration)
+                val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+                val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        if (continuation.isActive) continuation.resume(true)
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        if (continuation.isActive) continuation.resume(false)
+                    }
+                }, null)
+
+                if (!dispatched && continuation.isActive) {
+                    continuation.resume(false)
+                }
+            } catch (e: Throwable) {
+                if (continuation.isActive) continuation.resume(false)
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
