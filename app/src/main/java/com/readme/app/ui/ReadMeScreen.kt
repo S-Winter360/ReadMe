@@ -92,7 +92,8 @@ fun ReadMeScreen(
     onNavigateToSettings: () -> Unit = {},
     onNavigateToHowToUse: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
-    onNavigateToAccount: () -> Unit = {}
+    onNavigateToAccount: () -> Unit = {},
+    onNavigateToOnboarding: () -> Unit = {}
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val currentBackgroundBitmap by viewModel.currentBackgroundBitmap.collectAsStateWithLifecycle()
@@ -207,6 +208,21 @@ fun ReadMeScreen(
                                 leadingIcon = {
                                     Icon(
                                         painter = painterResource(id = R.drawable.ic_help),
+                                        contentDescription = "Welcome Tour Icon",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                text = { Text(stringResource(id = R.string.menu_welcome_tour), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onNavigateToOnboarding()
+                                }
+                            )
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_help),
                                         contentDescription = "How to Use Icon",
                                         modifier = Modifier.size(20.dp),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -268,21 +284,24 @@ fun ReadMeScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = if (currentBackgroundBitmap != null) Color.Transparent else MaterialTheme.colorScheme.background,
+                    containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                     navigationIconContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         },
-        containerColor = if (currentBackgroundBitmap != null) Color.Transparent else MaterialTheme.colorScheme.background
+        containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
+        // Main content container bounded strictly between top toolbar and bottom navigation area
         Box(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
         ) {
             if (currentBackgroundBitmap != null) {
                 androidx.compose.foundation.Image(
                     bitmap = currentBackgroundBitmap!!,
-                    contentDescription = "Dynamic Background Wallpaper",
+                    contentDescription = null,
                     contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -292,20 +311,15 @@ fun ReadMeScreen(
                         .background(
                             androidx.compose.ui.graphics.Brush.verticalGradient(
                                 colors = listOf(
-                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.35f),
                                     com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.50f),
-                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.65f)
+                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.68f),
+                                    com.readme.app.ui.theme.CharcoalBackground.copy(alpha = 0.82f)
                                 )
                             )
                         )
                 )
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
             if (pdfViewerState is PdfViewerState.Active) {
                 val activePdf = pdfViewerState as PdfViewerState.Active
                 Column(
@@ -627,7 +641,6 @@ fun ReadMeScreen(
             }
         }
     }
-}
 
 @Composable
 fun SystemBubbleToggle(

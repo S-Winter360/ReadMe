@@ -64,6 +64,7 @@
     <string name="onboarding_ready_auto_turn_ready">Auto page turn ready</string>
     <string name="onboarding_ready_auto_turn_not_enabled">Auto page turn not enabled yet</string>
     <string name="onboarding_replay_button">Replay Onboarding</string>
+    <string name="menu_welcome_tour">Welcome Tour</string>
 
     <!-- Notification & Playback -->
     <string name="notification_channel_name">ReadMe Reading Playback</string>

@@ -30,9 +30,8 @@ fun ReadMeApp(viewModel: ReadMeViewModel = viewModel()) {
     val isReducedMotion = rememberReducedMotion()
 
     var currentScreen by remember { mutableStateOf(Screen.Home) }
-    var isReplayingOnboarding by remember { mutableStateOf(false) }
 
-    if (startupState is StartupState.Ready && !isReplayingOnboarding && currentScreen != Screen.Home) {
+    if (startupState is StartupState.Ready && currentScreen != Screen.Home) {
         BackHandler {
             currentScreen = Screen.Home
         }
@@ -76,53 +75,44 @@ fun ReadMeApp(viewModel: ReadMeViewModel = viewModel()) {
                     )
                 }
                 StartupState.Ready -> {
-                    if (isReplayingOnboarding) {
-                        OnboardingScreen(
-                            viewModel = viewModel,
-                            isReplay = true,
-                            onFinishOnboarding = {
-                                isReplayingOnboarding = false
-                                currentScreen = Screen.Home
-                            }
-                        )
-                    } else {
-                        AnimatedContent(
-                            targetState = currentScreen,
-                            transitionSpec = readMeScreenTransition(isReducedMotion),
-                            label = "MainScreenTransition"
-                        ) { targetScreen ->
-                            when (targetScreen) {
-                                Screen.Onboarding -> {
-                                    OnboardingScreen(
-                                        viewModel = viewModel,
-                                        isReplay = true,
-                                        onFinishOnboarding = {
-                                            currentScreen = Screen.Home
-                                        }
-                                    )
-                                }
-                                Screen.Home -> ReadMeScreen(
+                    AnimatedContent(
+                        targetState = currentScreen,
+                        transitionSpec = readMeScreenTransition(isReducedMotion),
+                        label = "MainScreenTransition"
+                    ) { targetScreen ->
+                        when (targetScreen) {
+                            Screen.Onboarding -> {
+                                OnboardingScreen(
                                     viewModel = viewModel,
-                                    onNavigateToSettings = { currentScreen = Screen.Settings },
-                                    onNavigateToHowToUse = { currentScreen = Screen.HowToUse },
-                                    onNavigateToAbout = { currentScreen = Screen.About },
-                                    onNavigateToAccount = { currentScreen = Screen.Account }
-                                )
-                                Screen.Settings -> SettingsScreen(
-                                    viewModel = viewModel,
-                                    onNavigateBack = { currentScreen = Screen.Home }
-                                )
-                                Screen.HowToUse -> HowToUseScreen(
-                                    onNavigateBack = { currentScreen = Screen.Home },
-                                    onReplayOnboarding = { isReplayingOnboarding = true }
-                                )
-                                Screen.About -> AboutReadMeScreen(
-                                    onNavigateBack = { currentScreen = Screen.Home }
-                                )
-                                Screen.Account -> AccountScreen(
-                                    onNavigateBack = { currentScreen = Screen.Home }
+                                    isReplay = true,
+                                    onFinishOnboarding = {
+                                        currentScreen = Screen.Home
+                                    }
                                 )
                             }
+                            Screen.Home -> ReadMeScreen(
+                                viewModel = viewModel,
+                                onNavigateToSettings = { currentScreen = Screen.Settings },
+                                onNavigateToHowToUse = { currentScreen = Screen.HowToUse },
+                                onNavigateToAbout = { currentScreen = Screen.About },
+                                onNavigateToAccount = { currentScreen = Screen.Account },
+                                onNavigateToOnboarding = { currentScreen = Screen.Onboarding }
+                            )
+                            Screen.Settings -> SettingsScreen(
+                                viewModel = viewModel,
+                                onNavigateBack = { currentScreen = Screen.Home },
+                                onNavigateToOnboarding = { currentScreen = Screen.Onboarding }
+                            )
+                            Screen.HowToUse -> HowToUseScreen(
+                                onNavigateBack = { currentScreen = Screen.Home },
+                                onReplayOnboarding = { currentScreen = Screen.Onboarding }
+                            )
+                            Screen.About -> AboutReadMeScreen(
+                                onNavigateBack = { currentScreen = Screen.Home }
+                            )
+                            Screen.Account -> AccountScreen(
+                                onNavigateBack = { currentScreen = Screen.Home }
+                            )
                         }
                     }
                 }

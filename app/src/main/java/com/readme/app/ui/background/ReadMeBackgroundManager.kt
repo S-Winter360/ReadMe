@@ -8,6 +8,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import com.readme.app.BuildConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,7 +35,9 @@ sealed interface BackgroundImageSource {
         override fun openStream(context: Context): InputStream? = try {
             context.assets.open(assetPath)
         } catch (e: Exception) {
-            Log.e("ReadMeBackgroundManager", "Error opening asset $assetPath", e)
+            if (BuildConfig.DEBUG) {
+                Log.e("ReadMeWallpaper", "Error opening asset $assetPath: ${e.message}", e)
+            }
             null
         }
     }
@@ -43,7 +46,9 @@ sealed interface BackgroundImageSource {
         override fun openStream(context: Context): InputStream? = try {
             file.inputStream()
         } catch (e: Exception) {
-            Log.e("ReadMeBackgroundManager", "Error opening file ${file.absolutePath}", e)
+            if (BuildConfig.DEBUG) {
+                Log.e("ReadMeWallpaper", "Error opening file ${file.absolutePath}: ${e.message}", e)
+            }
             null
         }
     }
@@ -52,9 +57,10 @@ sealed interface BackgroundImageSource {
 /**
  * Manages main screen background wallpapers:
  * - Scans `app/src/main/assets/backgrounds/` and internal `files/backgrounds/` for image files.
- * - Automatically rotates/shuffles through images at a 20-minute interval.
- * - Decodes images with downsampling to maintain low memory usage and avoid OOM.
- * - Provides manual shuffle trigger and gallery import support.
+ * - Automatically rotates through wallpapers at a 20-minute interval.
+ * - Decodes images using memory-efficient inSampleSize downsampling.
+ * - Robust against progressive JPEGs, spaces, and non-ASCII filenames using byte-buffer decoding.
+ * - Controlled diagnostic logging enabled for debug builds only.
  */
 class ReadMeBackgroundManager(
     private val context: Context,
@@ -65,7 +71,7 @@ class ReadMeBackgroundManager(
         const val INTERNAL_BACKGROUNDS_DIR = "backgrounds"
         const val DEFAULT_INTERVAL_MINUTES = 20
 
-        private val SUPPORTED_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "bmp")
+        val SUPPORTED_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
 
         @Volatile
         private var instance: ReadMeBackgroundManager? = null
@@ -76,6 +82,11 @@ class ReadMeBackgroundManager(
                     instance = it
                 }
             }
+        }
+
+        fun isSupportedImageExtension(name: String): Boolean {
+            val ext = name.substringAfterLast('.', "").lowercase()
+            return ext in SUPPORTED_EXTENSIONS
         }
     }
 
@@ -101,15 +112,12 @@ class ReadMeBackgroundManager(
         startTicker()
     }
 
-    fun updateSettings(enabled: Boolean, intervalMin: Int) {
-        val shouldRestart = (isEnabled != enabled) || (intervalMinutes != intervalMin)
-        isEnabled = enabled
+    fun updateSettings(enabled: Boolean = true, intervalMin: Int = DEFAULT_INTERVAL_MINUTES) {
+        val shouldRestart = (intervalMinutes != intervalMin)
+        isEnabled = true // Always active as built-in automatic wallpaper feature
         intervalMinutes = intervalMin.coerceAtLeast(1)
 
-        if (!enabled) {
-            _currentBitmap.value = null
-            _currentImageName.value = null
-        } else if (shouldRestart) {
+        if (shouldRestart) {
             startTicker()
         }
     }
@@ -123,20 +131,25 @@ class ReadMeBackgroundManager(
                 val internalDir = File(context.filesDir, INTERNAL_BACKGROUNDS_DIR)
                 if (internalDir.exists() && internalDir.isDirectory) {
                     internalDir.listFiles()?.forEach { file ->
-                        if (file.isFile && isImageFile(file.name)) {
+                        if (file.isFile && isSupportedImageExtension(file.name)) {
                             list.add(BackgroundImageSource.FileSource(file, file.name))
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e("ReadMeBackgroundManager", "Error listing internal background files", e)
+                if (BuildConfig.DEBUG) {
+                    Log.e("ReadMeWallpaper", "Error listing internal background files", e)
+                }
             }
 
             // 2. Scan bundled assets: assets/backgrounds/
             try {
                 val assetFiles = context.assets.list(ASSET_BACKGROUNDS_DIR)
+                if (BuildConfig.DEBUG) {
+                    Log.d("ReadMeWallpaper", "Asset scan found ${assetFiles?.size ?: 0} raw entries in $ASSET_BACKGROUNDS_DIR")
+                }
                 assetFiles?.forEach { filename ->
-                    if (isImageFile(filename)) {
+                    if (isSupportedImageExtension(filename)) {
                         list.add(
                             BackgroundImageSource.AssetSource(
                                 "$ASSET_BACKGROUNDS_DIR/$filename",
@@ -146,16 +159,28 @@ class ReadMeBackgroundManager(
                     }
                 }
             } catch (e: Exception) {
-                Log.e("ReadMeBackgroundManager", "Error listing asset backgrounds", e)
+                if (BuildConfig.DEBUG) {
+                    Log.e("ReadMeWallpaper", "Error listing asset backgrounds", e)
+                }
             }
 
             _availableSources.value = list
+            if (BuildConfig.DEBUG) {
+                Log.d("ReadMeWallpaper", "Total discovered wallpaper candidates: ${list.size}")
+                list.forEachIndexed { i, s ->
+                    Log.d("ReadMeWallpaper", "  [$i] ${s.displayName}")
+                }
+            }
+
             updateCurrentBitmapForTime(System.currentTimeMillis())
         }
     }
 
     fun shuffleNext() {
         manualOffset++
+        if (BuildConfig.DEBUG) {
+            Log.d("ReadMeWallpaper", "Manual shuffle next invoked. Offset is now $manualOffset")
+        }
         coroutineScope.launch(Dispatchers.IO) {
             updateCurrentBitmapForTime(System.currentTimeMillis())
         }
@@ -163,6 +188,9 @@ class ReadMeBackgroundManager(
 
     fun shufflePrevious() {
         manualOffset--
+        if (BuildConfig.DEBUG) {
+            Log.d("ReadMeWallpaper", "Manual shuffle previous invoked. Offset is now $manualOffset")
+        }
         coroutineScope.launch(Dispatchers.IO) {
             updateCurrentBitmapForTime(System.currentTimeMillis())
         }
@@ -186,7 +214,9 @@ class ReadMeBackgroundManager(
                         importedCount++
                     }
                 } catch (e: Exception) {
-                    Log.e("ReadMeBackgroundManager", "Failed to import image from uri $uri", e)
+                    if (BuildConfig.DEBUG) {
+                        Log.e("ReadMeWallpaper", "Failed to import image from uri $uri", e)
+                    }
                 }
             }
 
@@ -207,10 +237,17 @@ class ReadMeBackgroundManager(
             while (isActive) {
                 val intervalMs = intervalMinutes * 60 * 1000L
                 val now = System.currentTimeMillis()
-                updateCurrentBitmapForTime(now)
-
                 val delayToNextSlot = intervalMs - (now % intervalMs)
+                if (BuildConfig.DEBUG) {
+                    Log.d("ReadMeWallpaper", "Next automatic wallpaper rotation in ${delayToNextSlot / 1000}s (${delayToNextSlot / 60000} mins)")
+                }
                 delay(delayToNextSlot.coerceAtLeast(1000L))
+                if (isActive) {
+                    if (BuildConfig.DEBUG) {
+                        Log.d("ReadMeWallpaper", "Automatic rotation timer fired at $now")
+                    }
+                    updateCurrentBitmapForTime(System.currentTimeMillis())
+                }
             }
         }
     }
@@ -224,6 +261,9 @@ class ReadMeBackgroundManager(
 
         val sources = _availableSources.value
         if (sources.isEmpty()) {
+            if (BuildConfig.DEBUG) {
+                Log.d("ReadMeWallpaper", "No wallpaper sources available. Defaulting to solid background.")
+            }
             _currentBitmap.value = null
             _currentImageName.value = null
             return
@@ -234,6 +274,11 @@ class ReadMeBackgroundManager(
         val calculatedIndex = ((timeSlot + manualOffset) % sources.size).toInt()
         val positiveIndex = if (calculatedIndex < 0) calculatedIndex + sources.size else calculatedIndex
 
+        if (BuildConfig.DEBUG) {
+            Log.d("ReadMeWallpaper", "Evaluating wallpaper slot $timeSlot (baseIndex=$positiveIndex, total=${sources.size})")
+        }
+
+        // Try current candidate, or fall back to subsequent candidates if decode fails
         for (offset in 0 until sources.size) {
             val candidateIndex = (positiveIndex + offset) % sources.size
             val candidateSource = sources[candidateIndex]
@@ -242,58 +287,99 @@ class ReadMeBackgroundManager(
                 _currentIndex.value = candidateIndex
                 _currentImageName.value = candidateSource.displayName
                 _currentBitmap.value = decoded
+                if (BuildConfig.DEBUG) {
+                    Log.d("ReadMeWallpaper", "Successfully activated wallpaper [$candidateIndex]: ${candidateSource.displayName}")
+                }
                 return
+            } else {
+                if (BuildConfig.DEBUG) {
+                    Log.w("ReadMeWallpaper", "Candidate [$candidateIndex] ${candidateSource.displayName} failed to decode. Trying next...")
+                }
             }
         }
 
         _currentBitmap.value = null
         _currentImageName.value = null
+        if (BuildConfig.DEBUG) {
+            Log.e("ReadMeWallpaper", "All ${sources.size} wallpaper candidates failed to decode.")
+        }
     }
 
-    private fun decodeSampledBitmap(
-        source: BackgroundImageSource,
-        reqWidth: Int = 1080,
-        reqHeight: Int = 1920
-    ): ImageBitmap? {
+    private fun getTargetDisplayDimensions(): Pair<Int, Int> {
         return try {
-            val options = BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-            source.openStream(context)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, options)
-            } ?: return null
+            val dm = context.resources.displayMetrics
+            Pair(
+                dm.widthPixels.coerceAtLeast(720),
+                dm.heightPixels.coerceAtLeast(1280)
+            )
+        } catch (_: Exception) {
+            Pair(1080, 1920)
+        }
+    }
 
-            if (options.outWidth <= 0 || options.outHeight <= 0) {
+    private fun decodeSampledBitmap(source: BackgroundImageSource): ImageBitmap? {
+        val (reqWidth, reqHeight) = getTargetDisplayDimensions()
+        return try {
+            // Read all bytes once into a byte array.
+            // This is essential for progressive JPEGs and AssetInputStream where mark/reset is unsupported.
+            val bytes = source.openStream(context)?.use { it.readBytes() }
+            if (bytes == null || bytes.isEmpty()) {
+                if (BuildConfig.DEBUG) {
+                    Log.w("ReadMeWallpaper", "Empty stream for ${source.displayName}")
+                }
                 return null
             }
 
+            // 1. Measure dimensions without allocating full bitmap
+            val boundsOptions = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+            val origWidth = boundsOptions.outWidth
+            val origHeight = boundsOptions.outHeight
+
+            if (origWidth <= 0 || origHeight <= 0) {
+                if (BuildConfig.DEBUG) {
+                    Log.w("ReadMeWallpaper", "Invalid image bounds for ${source.displayName}: ${origWidth}x${origHeight}")
+                }
+                return null
+            }
+
+            // 2. Compute power-of-2 inSampleSize
             var inSampleSize = 1
-            val height = options.outHeight
-            val width = options.outWidth
-            if (height > reqHeight || width > reqWidth) {
-                val halfHeight = height / 2
-                val halfWidth = width / 2
+            if (origHeight > reqHeight || origWidth > reqWidth) {
+                val halfHeight = origHeight / 2
+                val halfWidth = origWidth / 2
                 while ((halfHeight / inSampleSize) >= reqHeight || (halfWidth / inSampleSize) >= reqWidth) {
                     inSampleSize *= 2
                 }
             }
 
+            // 3. Decode bitmap with calculated sample size
             val decodeOptions = BitmapFactory.Options().apply {
                 this.inSampleSize = inSampleSize
                 inPreferredConfig = Bitmap.Config.ARGB_8888
             }
-            val bitmap = source.openStream(context)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, decodeOptions)
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions)
+            if (bitmap != null) {
+                if (BuildConfig.DEBUG) {
+                    Log.d(
+                        "ReadMeWallpaper",
+                        "Decoded ${source.displayName}: ${origWidth}x${origHeight} -> sampled ${bitmap.width}x${bitmap.height} (inSampleSize=$inSampleSize)"
+                    )
+                }
+                bitmap.asImageBitmap()
+            } else {
+                if (BuildConfig.DEBUG) {
+                    Log.w("ReadMeWallpaper", "BitmapFactory returned null for ${source.displayName}")
+                }
+                null
             }
-            bitmap?.asImageBitmap()
-        } catch (e: Exception) {
-            Log.e("ReadMeBackgroundManager", "Error decoding ${source.displayName}", e)
+        } catch (e: Throwable) {
+            if (BuildConfig.DEBUG) {
+                Log.e("ReadMeWallpaper", "Exception decoding wallpaper ${source.displayName}", e)
+            }
             null
         }
-    }
-
-    private fun isImageFile(name: String): Boolean {
-        val ext = name.substringAfterLast('.', "").lowercase()
-        return ext in SUPPORTED_EXTENSIONS
     }
 }

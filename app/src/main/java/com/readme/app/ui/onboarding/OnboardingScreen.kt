@@ -299,11 +299,7 @@ fun OnboardingScreen(
                     .testTag("onboarding_pager")
             ) { page ->
                 when (page) {
-                    0 -> WelcomeOnboardingPage(
-                        onGetStarted = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(1) }
-                        }
-                    )
+                    0 -> WelcomeOnboardingPage()
                     1 -> FloatingBubbleOnboardingPage(
                         hasOverlayPermission = hasOverlayPermission,
                         onToggleClicked = {
@@ -345,9 +341,6 @@ fun OnboardingScreen(
                                     bubbleController.hide()
                                 }
                             }
-                        },
-                        onNext = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(2) }
                         }
                     )
                     2 -> ScreenReadingOnboardingPage(
@@ -358,9 +351,6 @@ fun OnboardingScreen(
                             } else {
                                 viewModel.setCrossAppReadingEnabled(!settings.isCrossAppReadingEnabled)
                             }
-                        },
-                        onNext = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(3) }
                         }
                     )
                     3 -> AutoTurnPageOnboardingPage(
@@ -368,19 +358,58 @@ fun OnboardingScreen(
                         isAccessibilityEnabled = isAccessibilityEnabled,
                         onToggleClicked = {
                             viewModel.setAutoAdvanceScreenReadingEnabled(!settings.isAutoAdvanceScreenReadingEnabled)
-                        },
-                        onNext = {
-                            coroutineScope.launch { pagerState.animateScrollToPage(4) }
                         }
                     )
                     4 -> ReadyOnboardingPage(
                         hasOverlayPermission = hasOverlayPermission,
                         isAccessibilityEnabled = isAccessibilityEnabled,
-                        isAutoTurnEnabled = settings.isAutoAdvanceScreenReadingEnabled,
-                        onStartReading = {
+                        isAutoTurnEnabled = settings.isAutoAdvanceScreenReadingEnabled
+                    )
+                }
+            }
+
+            // Fixed Bottom Action Bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
+            ) {
+                when (pagerState.currentPage) {
+                    0 -> OnboardingPrimaryButton(
+                        text = "${stringResource(R.string.onboarding_get_started)} →",
+                        onClick = {
+                            coroutineScope.launch { pagerState.animateScrollToPage(1) }
+                        },
+                        testTag = "onboarding_get_started_button"
+                    )
+                    1 -> OnboardingPrimaryButton(
+                        text = "${stringResource(R.string.onboarding_next)} →",
+                        onClick = {
+                            coroutineScope.launch { pagerState.animateScrollToPage(2) }
+                        },
+                        testTag = "onboarding_bubble_next_button"
+                    )
+                    2 -> OnboardingPrimaryButton(
+                        text = "${stringResource(R.string.onboarding_next)} →",
+                        onClick = {
+                            coroutineScope.launch { pagerState.animateScrollToPage(3) }
+                        },
+                        testTag = "onboarding_reading_next_button"
+                    )
+                    3 -> OnboardingPrimaryButton(
+                        text = "${stringResource(R.string.onboarding_next)} →",
+                        onClick = {
+                            coroutineScope.launch { pagerState.animateScrollToPage(4) }
+                        },
+                        testTag = "onboarding_autonav_next_button"
+                    )
+                    4 -> OnboardingPrimaryButton(
+                        text = "${stringResource(R.string.onboarding_start_reading)} →",
+                        onClick = {
                             viewModel.updateOnboardingCompleted(true)
                             onFinishOnboarding()
-                        }
+                        },
+                        testTag = "onboarding_start_reading_button"
                     )
                 }
             }
@@ -392,115 +421,101 @@ fun OnboardingScreen(
  * Screen 1: Welcome
  */
 @Composable
-private fun WelcomeOnboardingPage(
-    onGetStarted: () -> Unit
-) {
+private fun WelcomeOnboardingPage() {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
-            .padding(bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // App Logo with soft teal glow
+        Box(
+            modifier = Modifier
+                .size(116.dp)
+                .drawBehind {
+                    drawCircle(
+                        color = OnboardingColors.GlowColor,
+                        radius = size.maxDimension * 0.75f
+                    )
+                },
+            contentAlignment = Alignment.Center
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // App Logo with soft teal glow
-            Box(
+            Image(
+                painter = painterResource(id = R.drawable.app_logo),
+                contentDescription = "ReadMe Logo",
                 modifier = Modifier
-                    .size(116.dp)
-                    .drawBehind {
-                        drawCircle(
-                            color = OnboardingColors.GlowColor,
-                            radius = size.maxDimension * 0.75f
-                        )
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.app_logo),
-                    contentDescription = "ReadMe Logo",
-                    modifier = Modifier
-                        .size(104.dp)
-                        .clip(RoundedCornerShape(26.dp))
-                )
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            ReadMeWordmark(fontSize = 38.sp)
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = stringResource(R.string.onboarding_welcome_title),
-                color = OnboardingColors.TextLight,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
+                    .size(104.dp)
+                    .clip(RoundedCornerShape(26.dp))
             )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = stringResource(R.string.onboarding_welcome_subtitle),
-                color = OnboardingColors.TextMuted,
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-                modifier = Modifier.padding(horizontal = 12.dp)
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            // 2x2 Grid of Benefit Cards
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                BenefitCard(
-                    title = stringResource(R.string.onboarding_benefit_1_title),
-                    subtitle = stringResource(R.string.onboarding_benefit_1_subtitle),
-                    modifier = Modifier.weight(1f)
-                )
-                BenefitCard(
-                    title = stringResource(R.string.onboarding_benefit_2_title),
-                    subtitle = stringResource(R.string.onboarding_benefit_2_subtitle),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                BenefitCard(
-                    title = stringResource(R.string.onboarding_benefit_3_title),
-                    subtitle = stringResource(R.string.onboarding_benefit_3_subtitle),
-                    modifier = Modifier.weight(1f)
-                )
-                BenefitCard(
-                    title = stringResource(R.string.onboarding_benefit_4_title),
-                    subtitle = stringResource(R.string.onboarding_benefit_4_subtitle),
-                    modifier = Modifier.weight(1f)
-                )
-            }
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        OnboardingPrimaryButton(
-            text = "${stringResource(R.string.onboarding_get_started)} →",
-            onClick = onGetStarted,
-            testTag = "onboarding_get_started_button"
+        ReadMeWordmark(fontSize = 38.sp)
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_welcome_title),
+            color = OnboardingColors.TextLight,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
         )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_welcome_subtitle),
+            color = OnboardingColors.TextMuted,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // 2x2 Grid of Benefit Cards
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            BenefitCard(
+                title = stringResource(R.string.onboarding_benefit_1_title),
+                subtitle = stringResource(R.string.onboarding_benefit_1_subtitle),
+                modifier = Modifier.weight(1f)
+            )
+            BenefitCard(
+                title = stringResource(R.string.onboarding_benefit_2_title),
+                subtitle = stringResource(R.string.onboarding_benefit_2_subtitle),
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            BenefitCard(
+                title = stringResource(R.string.onboarding_benefit_3_title),
+                subtitle = stringResource(R.string.onboarding_benefit_3_subtitle),
+                modifier = Modifier.weight(1f)
+            )
+            BenefitCard(
+                title = stringResource(R.string.onboarding_benefit_4_title),
+                subtitle = stringResource(R.string.onboarding_benefit_4_subtitle),
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -551,64 +566,51 @@ private fun BenefitCard(
 @Composable
 private fun FloatingBubbleOnboardingPage(
     hasOverlayPermission: Boolean,
-    onToggleClicked: () -> Unit,
-    onNext: () -> Unit
+    onToggleClicked: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
-            .padding(bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OnboardingPhoneIllustration(type = OnboardingIllustrationType.FloatingBubble)
+        OnboardingPhoneIllustration(type = OnboardingIllustrationType.FloatingBubble)
 
-            Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-            Text(
-                text = stringResource(R.string.onboarding_bubble_title),
-                color = OnboardingColors.TextLight,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+        Text(
+            text = stringResource(R.string.onboarding_bubble_title),
+            color = OnboardingColors.TextLight,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
 
-            Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-            Text(
-                text = stringResource(R.string.onboarding_bubble_subtitle),
-                color = OnboardingColors.TextMuted,
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            OnboardingToggleCard(
-                iconPainter = painterResource(id = R.drawable.ic_bubble_card),
-                title = stringResource(R.string.onboarding_bubble_toggle_title),
-                subtitle = stringResource(R.string.onboarding_bubble_toggle_subtitle),
-                checked = hasOverlayPermission,
-                onCheckedChange = { onToggleClicked() },
-                testTag = "onboarding_bubble_toggle"
-            )
-        }
+        Text(
+            text = stringResource(R.string.onboarding_bubble_subtitle),
+            color = OnboardingColors.TextMuted,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 14.dp)
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        OnboardingPrimaryButton(
-            text = "${stringResource(R.string.onboarding_next)} →",
-            onClick = onNext,
-            testTag = "onboarding_bubble_next_button"
+        OnboardingToggleCard(
+            iconPainter = painterResource(id = R.drawable.ic_bubble_card),
+            title = stringResource(R.string.onboarding_bubble_toggle_title),
+            subtitle = stringResource(R.string.onboarding_bubble_toggle_subtitle),
+            checked = hasOverlayPermission,
+            onCheckedChange = { onToggleClicked() },
+            testTag = "onboarding_bubble_toggle"
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -618,64 +620,51 @@ private fun FloatingBubbleOnboardingPage(
 @Composable
 private fun ScreenReadingOnboardingPage(
     isAccessibilityEnabled: Boolean,
-    onToggleClicked: () -> Unit,
-    onNext: () -> Unit
+    onToggleClicked: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
-            .padding(bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OnboardingPhoneIllustration(type = OnboardingIllustrationType.ScreenReading)
+        OnboardingPhoneIllustration(type = OnboardingIllustrationType.ScreenReading)
 
-            Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-            Text(
-                text = stringResource(R.string.onboarding_reading_title),
-                color = OnboardingColors.TextLight,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
+        Text(
+            text = stringResource(R.string.onboarding_reading_title),
+            color = OnboardingColors.TextLight,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
 
-            Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
-            Text(
-                text = stringResource(R.string.onboarding_reading_subtitle),
-                color = OnboardingColors.TextMuted,
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            OnboardingToggleCard(
-                iconPainter = painterResource(id = R.drawable.ic_accessibility_card),
-                title = stringResource(R.string.onboarding_reading_toggle_title),
-                subtitle = stringResource(R.string.onboarding_reading_toggle_subtitle),
-                checked = isAccessibilityEnabled,
-                onCheckedChange = { onToggleClicked() },
-                testTag = "onboarding_reading_toggle"
-            )
-        }
+        Text(
+            text = stringResource(R.string.onboarding_reading_subtitle),
+            color = OnboardingColors.TextMuted,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 14.dp)
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        OnboardingPrimaryButton(
-            text = "${stringResource(R.string.onboarding_next)} →",
-            onClick = onNext,
-            testTag = "onboarding_reading_next_button"
+        OnboardingToggleCard(
+            iconPainter = painterResource(id = R.drawable.ic_accessibility_card),
+            title = stringResource(R.string.onboarding_reading_toggle_title),
+            subtitle = stringResource(R.string.onboarding_reading_toggle_subtitle),
+            checked = isAccessibilityEnabled,
+            onCheckedChange = { onToggleClicked() },
+            testTag = "onboarding_reading_toggle"
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -686,75 +675,62 @@ private fun ScreenReadingOnboardingPage(
 private fun AutoTurnPageOnboardingPage(
     isAutoTurnEnabled: Boolean,
     isAccessibilityEnabled: Boolean,
-    onToggleClicked: () -> Unit,
-    onNext: () -> Unit
+    onToggleClicked: () -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
-            .padding(bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OnboardingPhoneIllustration(type = OnboardingIllustrationType.AutoTurnPage)
+        OnboardingPhoneIllustration(type = OnboardingIllustrationType.AutoTurnPage)
 
-            Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
+        Text(
+            text = stringResource(R.string.onboarding_autonav_title),
+            color = OnboardingColors.TextLight,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_autonav_subtitle),
+            color = OnboardingColors.TextMuted,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            lineHeight = 22.sp,
+            modifier = Modifier.padding(horizontal = 14.dp)
+        )
+
+        if (!isAccessibilityEnabled) {
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = stringResource(R.string.onboarding_autonav_title),
-                color = OnboardingColors.TextLight,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = stringResource(R.string.onboarding_autonav_subtitle),
-                color = OnboardingColors.TextMuted,
-                fontSize = 15.sp,
+                text = stringResource(R.string.onboarding_autonav_requires_accessibility),
+                color = OnboardingColors.WordmarkTeal,
+                fontSize = 12.sp,
                 textAlign = TextAlign.Center,
-                lineHeight = 22.sp,
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-
-            if (!isAccessibilityEnabled) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.onboarding_autonav_requires_accessibility),
-                    color = OnboardingColors.WordmarkTeal,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            OnboardingToggleCard(
-                iconPainter = painterResource(id = R.drawable.ic_auto_turn_card),
-                title = stringResource(R.string.onboarding_autonav_toggle_title),
-                subtitle = stringResource(R.string.onboarding_autonav_toggle_subtitle),
-                checked = isAutoTurnEnabled,
-                onCheckedChange = { onToggleClicked() },
-                testTag = "onboarding_autonav_toggle"
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        OnboardingPrimaryButton(
-            text = "${stringResource(R.string.onboarding_next)} →",
-            onClick = onNext,
-            testTag = "onboarding_autonav_next_button"
+        OnboardingToggleCard(
+            iconPainter = painterResource(id = R.drawable.ic_auto_turn_card),
+            title = stringResource(R.string.onboarding_autonav_toggle_title),
+            subtitle = stringResource(R.string.onboarding_autonav_toggle_subtitle),
+            checked = isAutoTurnEnabled,
+            onCheckedChange = { onToggleClicked() },
+            testTag = "onboarding_autonav_toggle"
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -765,113 +741,100 @@ private fun AutoTurnPageOnboardingPage(
 private fun ReadyOnboardingPage(
     hasOverlayPermission: Boolean,
     isAccessibilityEnabled: Boolean,
-    isAutoTurnEnabled: Boolean,
-    onStartReading: () -> Unit
+    isAutoTurnEnabled: Boolean
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
-            .padding(bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(bottom = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // App Logo with soft teal glow
+        Box(
+            modifier = Modifier
+                .size(116.dp)
+                .drawBehind {
+                    drawCircle(
+                        color = OnboardingColors.GlowColor,
+                        radius = size.maxDimension * 0.75f
+                    )
+                },
+            contentAlignment = Alignment.Center
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // App Logo with soft teal glow
-            Box(
+            Image(
+                painter = painterResource(id = R.drawable.app_logo),
+                contentDescription = "ReadMe Logo",
                 modifier = Modifier
-                    .size(116.dp)
-                    .drawBehind {
-                        drawCircle(
-                            color = OnboardingColors.GlowColor,
-                            radius = size.maxDimension * 0.75f
-                        )
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.app_logo),
-                    contentDescription = "ReadMe Logo",
-                    modifier = Modifier
-                        .size(104.dp)
-                        .clip(RoundedCornerShape(26.dp))
-                )
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            ReadMeWordmark(fontSize = 38.sp)
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            Text(
-                text = stringResource(R.string.onboarding_ready_title),
-                color = OnboardingColors.TextLight,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = stringResource(R.string.onboarding_ready_subtitle),
-                color = OnboardingColors.TextMuted,
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 14.dp)
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            // 3 Status Items
-            OnboardingStatusItem(
-                title = if (hasOverlayPermission) {
-                    stringResource(R.string.onboarding_ready_bubble_ready)
-                } else {
-                    stringResource(R.string.onboarding_ready_bubble_not_enabled)
-                },
-                isReady = hasOverlayPermission,
-                testTag = "ready_item_bubble"
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OnboardingStatusItem(
-                title = if (isAccessibilityEnabled) {
-                    stringResource(R.string.onboarding_ready_screen_reading_ready)
-                } else {
-                    stringResource(R.string.onboarding_ready_screen_reading_not_enabled)
-                },
-                isReady = isAccessibilityEnabled,
-                testTag = "ready_item_screen_reading"
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OnboardingStatusItem(
-                title = if (isAutoTurnEnabled) {
-                    stringResource(R.string.onboarding_ready_auto_turn_ready)
-                } else {
-                    stringResource(R.string.onboarding_ready_auto_turn_not_enabled)
-                },
-                isReady = isAutoTurnEnabled,
-                testTag = "ready_item_auto_turn"
+                    .size(104.dp)
+                    .clip(RoundedCornerShape(26.dp))
             )
         }
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        OnboardingPrimaryButton(
-            text = "${stringResource(R.string.onboarding_start_reading)} →",
-            onClick = onStartReading,
-            testTag = "onboarding_start_reading_button"
+        ReadMeWordmark(fontSize = 38.sp)
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_ready_title),
+            color = OnboardingColors.TextLight,
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
         )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = stringResource(R.string.onboarding_ready_subtitle),
+            color = OnboardingColors.TextMuted,
+            fontSize = 15.sp,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 14.dp)
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // 3 Status Items
+        OnboardingStatusItem(
+            title = if (hasOverlayPermission) {
+                stringResource(R.string.onboarding_ready_bubble_ready)
+            } else {
+                stringResource(R.string.onboarding_ready_bubble_not_enabled)
+            },
+            isReady = hasOverlayPermission,
+            testTag = "ready_item_bubble"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OnboardingStatusItem(
+            title = if (isAccessibilityEnabled) {
+                stringResource(R.string.onboarding_ready_screen_reading_ready)
+            } else {
+                stringResource(R.string.onboarding_ready_screen_reading_not_enabled)
+            },
+            isReady = isAccessibilityEnabled,
+            testTag = "ready_item_screen_reading"
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OnboardingStatusItem(
+            title = if (isAutoTurnEnabled) {
+                stringResource(R.string.onboarding_ready_auto_turn_ready)
+            } else {
+                stringResource(R.string.onboarding_ready_auto_turn_not_enabled)
+            },
+            isReady = isAutoTurnEnabled,
+            testTag = "ready_item_auto_turn"
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }

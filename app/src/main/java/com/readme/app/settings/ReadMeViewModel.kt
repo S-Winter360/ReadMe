@@ -335,6 +335,13 @@ class ReadMeViewModel @JvmOverloads constructor(
         }
     }
 
+    fun resetOnboarding() {
+        _completedOnboardingThisSession.value = false
+        viewModelScope.launch {
+            repository.updateOnboardingCompleted(false)
+        }
+    }
+
     fun shuffleNextBackground() = backgroundManager.shuffleNext()
 
     fun shufflePreviousBackground() = backgroundManager.shufflePrevious()
